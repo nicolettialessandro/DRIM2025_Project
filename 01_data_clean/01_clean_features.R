@@ -95,6 +95,19 @@ summary(DT[, .(q_1m, q_3m, q_6m, q_1y, slope_1y_1m, curvature)])
 
 library(ggplot2)
 
+DT_sample <- DT[sample(.N, 5000)]
+
+ggplot(DT_sample, aes(x = slope_1y_1m, y = curvature, color = gdesc)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +
+  labs(
+    title = "Relationship between slopes and curvature (sample 5000 companies)",
+    x = "Slope (1Y - 1M)",
+    y = "Curvature (6M vs avarage of 1M and 1Y)",
+    color = "Sector"
+  ) +
+  theme_minimal(base_size = 13)
+
 ggplot(DT, aes(x = slope_1y_1m, y = curvature, color = gdesc)) +
   geom_point(alpha = 0.5, size = 1) +
   geom_smooth(method = "loess", se = TRUE, color = "black", linewidth = 0.8) +

@@ -1,4 +1,24 @@
-.Rproj.user
-.Rhistory
-.RData
-.Ruserdata
+# =========================================
+# GITIGNORE FILE – DRIM2025_Project
+# =========================================
+
+# 1. Raw data files (very large)
+00_data_raw/
+*.txt
+*.csv
+
+# 2. Cleaned or derived datasets
+01_data_clean/*.parquet
+01_data_clean/*.csv
+
+# 3. Local environments and caches
+*.RData
+*.Rhistory
+.DS_Store
+.Rproj.user/
+
+# 4. Output or temporary folders
+03_outputs/
+*.png
+*.pdf
+*.html

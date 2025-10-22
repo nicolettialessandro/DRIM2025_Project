@@ -1,0 +1,32 @@
+DRIM2025_Project/
+│
+├── 00_data_raw/
+│   └── DRIM_VF.txt
+│
+├── 01_data_clean/
+│   └── (conterrà output pulito .parquet)
+│
+├── 02_team_modules/
+│   ├── A_Data_Features/
+│   │   ├── 01_clean_features.R
+│   │   └── output_features.parquet
+│   │
+│   ├── B_Descriptive_Analysis/
+│   │   ├── 02_aggregation_descriptives.R
+│   │   └── output_agg.csv
+│   │
+│   ├── C_Clustering_Segmentation/
+│   │   ├── 03_clustering_segmentation.R
+│   │   └── output_clusters.csv
+│   │
+│   ├── D_Dependencies_Macro/
+│   │   ├── 04_dependencies_macro.R
+│   │   └── output_model_results.csv
+│
+├── 03_outputs/
+│   ├── figs/
+│   ├── tables/
+│   └── models/
+│
+├── Final_Report.Rmd
+└── README.md   ← (il file qui sotto)

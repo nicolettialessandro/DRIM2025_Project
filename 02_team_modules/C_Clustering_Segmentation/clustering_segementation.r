@@ -1,151 +1,164 @@
-#install.packages("data.table","cluster")
+# ==========================================================
+# 03_clustering_segmentation.R
+# DRIM2025 Project – Credit Risk Clustering (clean & robust)
+# ==========================================================
 
-library(data.table)
-library(arrow)
-library(ggplot2)
-library(cluster)  
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(arrow)
+  library(cluster)
+  library(factoextra)
+  library(NbClust)
+})
 
-#Carica features
+set.seed(123)
 
-set.seed(42)
+# ---------- 0) Utility ----------
+ensure_dir <- function(path) if (!dir.exists(path)) dir.create(path, recursive = TRUE)
 
-features_path <- "01_data_clean/output_features.parquet"
-DT <- as.data.table(read_parquet(features_path))
+out_dir <- "02_team_modules/C_Clustering_Segmentation"
+ensure_dir(out_dir)
 
-# colonne chiave “di forma” già create nella parte A
-vars <- c("slope_1y_1m", "slope_5y_1y", "curvature", "curvature_5y",
-          "q_1m", "q_6m", "q_1y", "q_3y", "q_5y")
+# ---------- 1) Load cleaned data ----------
+data <- read_parquet("01_data_clean/output_features.parquet")
 
-# tieni solo righe complete su queste variabili
-DT_use <- DT[, c("tic","data_date","gdesc", vars), with = FALSE]
-DT_use <- DT_use[complete.cases(DT_use)]
-nrow(DT_use)
+# Controlli base
+stopifnot(all(c("country","gdesc") %in% names(data)))
+kdp_cols <- grep("^kdp_", names(data), value = TRUE)
+if (length(kdp_cols) == 0) stop("Nessuna colonna KDP_ trovata nel file parquet.")
 
-# Standardizza (molto importante per K-means)
-X <- as.matrix(DT_use[, ..vars])
-X_scaled <- scale(X)            # salva centri e scale per profiling dopo
+# ---------- 2) Aggregate PDs by country-sector ----------
+agg_df <- data %>%
+  group_by(country, gdesc) %>%
+  summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop")
 
-center_ <- attr(X_scaled, "center")
-scale_  <- attr(X_scaled, "scale")
-
-#Scegli k (elbow + silhouette su un sample per velocità)
-# === Selezione k: elbow su 50k, silhouette su 5k (no O(n^2) gigantesca) ===
-ns_elbow <- min(50000, nrow(X_scaled))
-ns_sil   <- min(5000,  nrow(X_scaled))   # <<< qui il fix principale
-
-set.seed(42)
-idx_elbow <- sample.int(nrow(X_scaled), ns_elbow)
-idx_sil   <- sample.int(nrow(X_scaled), ns_sil)
-
-Xe <- X_scaled[idx_elbow, , drop = FALSE]
-Xs <- X_scaled[idx_sil,   , drop = FALSE]
-
-ks <- 2:8
-elbow <- numeric(length(ks))
-silav <- numeric(length(ks))
-
-# 1) Elbow (veloce, nessuna distanza O(n^2))
-for (i in seq_along(ks)) {
-  k <- ks[i]
-  km <- kmeans(Xe, centers = k, nstart = 5, iter.max = 50)
-  elbow[i] <- km$tot.withinss
+# Rimuove colonne KDP costanti o completamente NA (evita problemi in scale/kmeans)
+is_all_na <- sapply(agg_df[kdp_cols], function(v) all(is.na(v)))
+if (any(is_all_na)) {
+  message("Rimossa/e colonna/e KDP tutta/e NA: ", paste(kdp_cols[is_all_na], collapse = ", "))
+  kdp_cols <- kdp_cols[!is_all_na]
 }
 
-# 2) Silhouette: calcolo distanze UNA sola volta su 5k
-d_sil <- dist(Xs)  # ora è ~ (5000*4999/2)*8B ≈ 100 MB
-for (i in seq_along(ks)) {
-  k <- ks[i]
-  km <- kmeans(Xs, centers = k, nstart = 5, iter.max = 50)
-  sil <- silhouette(km$cluster, d_sil)
-  silav[i] <- mean(sil[, 3])
+# Se qualche colonna ha varianza ~0, rimuovila (kmeans si basa su distanza euclidea)
+near_zero_var <- function(x) isTRUE(all.equal(sd(x, na.rm = TRUE), 0))
+nzv <- sapply(agg_df[kdp_cols], near_zero_var)
+if (any(nzv)) {
+  message("Rimossa/e colonna/e KDP con varianza ~0: ", paste(kdp_cols[nzv], collapse = ", "))
+  kdp_cols <- kdp_cols[!nzv]
+}
+if (length(kdp_cols) < 2) stop("Servono almeno 2 orizzonti KDP non degeneri per il clustering.")
+
+# ---------- 3) Matrix for clustering ----------
+clust_mat <- agg_df %>%
+  select(all_of(kdp_cols)) %>%
+  as.matrix()
+
+# Standardizza (z-score)
+clust_data <- scale(clust_mat)
+
+# ---------- 4) Determina k (NbClust + fallback silhouette) ----------
+k_opt <- NA_integer_
+
+# Prova NbClust (può fallire su alcuni dataset)
+nb_res <- try({
+  NbClust(clust_data, distance = "euclidean", min.nc = 2, max.nc = 10, method = "kmeans")
+}, silent = TRUE)
+
+if (!inherits(nb_res, "try-error")) {
+  tab <- table(nb_res$Best.nc[1, ])
+  k_opt <- as.numeric(names(which.max(tab)))
+  message("NbClust suggerisce k = ", k_opt)
+} else {
+  message("NbClust non disponibile/ha fallito: passo alla silhouette.")
 }
 
-k_opt <- ks[which.max(silav)]
-k_opt
+# Se NbClust ha fallito o ha dato qualcosa di strano, usa silhouette
+if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
+  sil_scores <- c()
+  for (k in 2:10) {
+    km_tmp <- kmeans(clust_data, centers = k, nstart = 25)
+    sil <- silhouette(km_tmp$cluster, dist(clust_data))
+    sil_scores <- c(sil_scores, mean(sil[, "sil_width"]))
+  }
+  k_opt <- which.max(sil_scores) + 1  # +1 perché parte da 2
+  message("Silhouette suggerisce k = ", k_opt)
+}
 
-#Salva i grafici diagnostici
-dir.create("03_outputs/figs", recursive = TRUE, showWarnings = FALSE)
-df_k <- data.frame(k = ks, elbow = elbow, silhouette = silav)
-ggplot(df_k, aes(k, elbow)) + geom_line() + geom_point() +
-  labs(title="Elbow (tot within SS)") + theme_minimal()
-ggsave("03_outputs/figs/k_elbow.png", width=6, height=4, dpi=150)
+# Fallback finale prudente
+if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
+  k_opt <- 4
+  message("Fallback: k = 4")
+}
 
-ggplot(df_k, aes(k, silhouette)) + geom_line() + geom_point() +
-  labs(title="Average silhouette") + theme_minimal()
-ggsave("03_outputs/figs/k_silhouette.png", width=6, height=4, dpi=150)
+# ---------- 5) K-means ----------
+km <- kmeans(clust_data, centers = k_opt, nstart = 50)
+agg_df <- agg_df %>%
+  mutate(Cluster = factor(km$cluster))
 
-# Allenamento scalabile del K-means
+# ---------- 6) Ordinamento cluster per rischio medio ----------
+cluster_summary <- agg_df %>%
+  group_by(Cluster) %>%
+  summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
+  mutate(PD_mean_overall = rowMeans(across(all_of(kdp_cols)), na.rm = TRUE)) %>%
+  arrange(PD_mean_overall)
 
-#fai k-means sul sample per trovare centri buoni;
-#poi lancia k-means su TUTTO usando quei centri come inizializzazione (veloce e stabile).
+# Mappa i livelli (Cluster 1 = più basso rischio, ... = più alto rischio)
+level_map <- setNames(seq_len(nrow(cluster_summary)), cluster_summary$Cluster)
+agg_df <- agg_df %>%
+  mutate(Cluster = factor(level_map[Cluster], levels = seq_len(nrow(cluster_summary))))
 
-# 4a) fit su sample
-km_s <- kmeans(Xs, centers = k_opt, nstart = 10, iter.max = 100)
+# Ricalcola il summary con i nuovi livelli ordinati
+cluster_summary <- agg_df %>%
+  group_by(Cluster) %>%
+  summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
+  mutate(PD_mean_overall = rowMeans(across(all_of(kdp_cols)), na.rm = TRUE)) %>%
+  arrange(as.integer(Cluster))
 
-# 4b) fit su tutto, iniziando dai centri del sample
-km_full <- kmeans(X_scaled, centers = km_s$centers, iter.max = 100)
-table(km_full$cluster)
+# ---------- 7) Paesi e Settori più rappresentati ----------
+top_n <- 25
 
+top_countries <- agg_df %>%
+  count(Cluster, country, name = "n") %>%
+  group_by(Cluster) %>%
+  slice_max(n, n = top_n, with_ties = FALSE) %>%
+  arrange(Cluster, desc(n)) %>%
+  ungroup()
 
-#Assegna cluster e salva
-DT_use[, cluster := factor(km_full$cluster)]
+top_sectors <- agg_df %>%
+  count(Cluster, gdesc, name = "n") %>%
+  group_by(Cluster) %>%
+  slice_max(n, n = top_n, with_ties = FALSE) %>%
+  arrange(Cluster, desc(n)) %>%
+  ungroup()
 
-# Tabella di profilo cluster (medie nelle unità ORIGINALI)
-centers_scaled <- km_full$centers
-centers_orig <- sweep(centers_scaled, 2, scale_, `*`)
-centers_orig <- sweep(centers_orig, 2, center_, `+`)
-centers_dt <- as.data.table(centers_orig)
-centers_dt[, cluster := 1:nrow(centers_dt)]
-setcolorder(centers_dt, c("cluster", vars))
+# ---------- 8) Grafici ----------
+# (a) PD medie per orizzonte
+pd_long <- cluster_summary %>%
+  select(Cluster, all_of(kdp_cols)) %>%
+  pivot_longer(cols = all_of(kdp_cols), names_to = "Horizon", values_to = "PD")
 
-# Salvataggi
-dir.create("02_team_modules/C_Clustering_Segmentation", recursive = TRUE, showWarnings = FALSE)
-cols_out <- c("tic","data_date","gdesc","cluster", vars)
-fwrite(DT_use[, ..cols_out], "02_team_modules/C_Clustering_Segmentation/output_clusters.csv")
-saveRDS(list(k = k_opt, centers_scaled = centers_scaled,
-             center = center_, scale = scale_),
-        "03_outputs/models/kmeans_centers.rds")
+p_pd <- ggplot(pd_long, aes(Horizon, PD, group = Cluster, color = Cluster)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(title = "Average Probability of Default by Cluster",
+       subtitle = "Cluster ordinati dal rischio medio più basso (1) al più alto",
+       y = "PD media (%)", x = "Orizzonte")
 
-fwrite(centers_dt, "02_team_modules/C_Clustering_Segmentation/cluster_centroids.csv")
+print(p_pd)
 
-#Plot
-# scatter slope vs curvature (sample per leggibilità)
-ns_plot <- min(20000, nrow(DT_use))
-idx_p <- sample.int(nrow(DT_use), ns_plot)
+# (b) PCA + cluster (solo per visualizzazione)
+# NB: rifacciamo un kmeans sui livelli riordinati per coerenza visiva
+km_plot <- kmeans(clust_data, centers = nlevels(agg_df$Cluster), nstart = 50)
+fviz_cluster(km_plot, data = clust_data, geom = "point", ellipse.type = "convex") +
+  ggtitle("Clustering of Country–Sector Risk Profiles (PCA view)")
 
-p1 <- ggplot(DT_use[idx_p], aes(slope_1y_1m, curvature, color = cluster)) +
-  geom_point(alpha = 0.5, size = 1) +
-  labs(title = sprintf("K-means clustering (k = %d): slope vs curvature", k_opt),
-       x = "Slope (1Y - 1M)", y = "Curvature (6M vs avg 1M & 1Y)") +
-  theme_minimal() + theme(legend.position = "bottom")
-ggsave("03_outputs/figs/clusters_slope_curvature.png", p1, width = 7, height = 5, dpi = 150)
+# ---------- 9) Export ----------
+write_csv(agg_df, file.path(out_dir, "output_clusters.csv"))
+write_csv(cluster_summary, file.path(out_dir, "summary_clusters.csv"))
+write_csv(top_countries, file.path(out_dir, "top_countries_per_cluster.csv"))
+write_csv(top_sectors, file.path(out_dir, "top_sectors_per_cluster.csv"))
 
-# profilo centroidi (radar-like 'poverello' con linee, normalizzato)
-centers_norm <- as.data.table(scale(centers_orig))
-centers_norm[, cluster := factor(1:.N)]
-centers_long <- melt(centers_norm, id.vars = "cluster",
-                     variable.name = "feature", value.name = "z_score")
-
-p2 <- ggplot(centers_long, aes(feature, z_score, group = cluster, color = cluster)) +
-  geom_line(linewidth = 1) + geom_point() +
-  coord_flip() +
-  labs(title = "Cluster profiles (standardized features)") +
-  theme_minimal()
-ggsave("03_outputs/figs/cluster_profiles.png", p2, width = 7, height = 5, dpi = 150)
-
-#Summary table
-summary_tbl <- DT_use[, .(
-  n = .N,
-  slope_1y_1m = mean(slope_1y_1m),
-  slope_5y_1y  = mean(slope_5y_1y),
-  curvature    = mean(curvature),
-  curvature_5y = mean(curvature_5y),
-  q_1y         = mean(q_1y),
-  q_5y         = mean(q_5y)
-), by = cluster][order(cluster)]
-
-fwrite(summary_tbl, "02_team_modules/C_Clustering_Segmentation/cluster_summary.csv")
-summary_tbl
-
-sector_mix <- DT_use[, .N, by = .(cluster, gdesc)][order(cluster, -N)]
-fwrite(sector_mix, "02_team_modules/C_Clustering_Segmentation/cluster_sector_mix.csv")
+message("=== DONE ===")
+message("k scelto: ", k_opt)
+message("File scritti in: ", normalizePath(out_dir))

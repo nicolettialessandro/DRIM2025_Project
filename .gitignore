@@ -1,4 +1,13 @@
-.Rproj.user
+# File temporanei e RStudio
 .Rhistory
 .RData
-.Ruserdata
+.RDataTmp*
+.Rproj.user/
+
+# File di output pesanti
+*.txt
+*.parquet
+
+# Dati grezzi o output intermedi
+01_data_clean/output_features.parquet
+0_data_raw/DRIM_VF.txt

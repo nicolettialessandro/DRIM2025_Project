@@ -84,16 +84,64 @@ if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
   message("Silhouette suggerisce k = ", k_opt)
 }
 
-# Fallback finale prudente
-if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
-  k_opt <- 4
-  message("Fallback: k = 4")
-}
+k_opt <- 4   # scelta analitica, compromesso tra separazione e granularità
 
 # ---------- 5) K-means ----------
 km <- kmeans(clust_data, centers = k_opt, nstart = 50)
 agg_df <- agg_df %>%
   mutate(Cluster = factor(km$cluster))
+
+# ---------- 5B) Rimozione outlier e rifacimento clustering ----------
+
+# Conta quante osservazioni ha ciascun cluster
+cluster_sizes <- agg_df %>%
+  count(Cluster, name = "n")
+
+# Trova i cluster con solo 1 osservazione (outlier)
+outlier_clusters <- cluster_sizes %>%
+  filter(n == 1) %>%
+  pull(Cluster)
+
+if (length(outlier_clusters) > 0) {
+  message("Rimossi i cluster outlier: ", paste(outlier_clusters, collapse = ", "))
+  
+  # Filtra via l’outlier
+  agg_df_clean <- agg_df %>%
+    filter(!Cluster %in% outlier_clusters)
+  
+  # Rifai il clustering con k = 3 (dopo aver tolto l'outlier)
+  kdp_cols <- grep("^kdp_", names(agg_df_clean), value = TRUE)
+  clust_data_clean <- scale(as.matrix(agg_df_clean %>% select(all_of(kdp_cols))))
+  
+  set.seed(123)
+  km3 <- kmeans(clust_data_clean, centers = 3, nstart = 50)
+  
+  # Aggiorna il dataframe con i nuovi cluster
+  agg_df <- agg_df_clean %>%
+    mutate(Cluster = factor(km3$cluster))
+  
+  message("Rieseguito K-means con k = 3 dopo rimozione outlier.")
+} else {
+  message("Nessun cluster outlier trovato — mantengo il clustering originale.")
+}
+
+# --- Silhouette plot per capire k ---
+library(cluster)
+sil_means <- c()
+for (k in 2:10) {
+  km <- kmeans(clust_data, centers = k, nstart = 25)
+  ss <- silhouette(km$cluster, dist(clust_data))
+  sil_means <- c(sil_means, mean(ss[, "sil_width"]))
+}
+sil_df <- data.frame(k = 2:10, silhouette = sil_means)
+
+ggplot(sil_df, aes(k, silhouette)) +
+  geom_line(color = "blue") +
+  geom_point() +
+  theme_minimal() +
+  labs(title = "Silhouette scores per k", x = "Number of clusters", y = "Average silhouette width")
+
+ggsave("02_team_modules/C_Clustering_Segmentation/silhouette_plot.png", width = 8, height = 5)
 
 # ---------- 6) Ordinamento cluster per rischio medio ----------
 cluster_summary <- agg_df %>%
@@ -153,6 +201,20 @@ km_plot <- kmeans(clust_data, centers = nlevels(agg_df$Cluster), nstart = 50)
 fviz_cluster(km_plot, data = clust_data, geom = "point", ellipse.type = "convex") +
   ggtitle("Clustering of Country–Sector Risk Profiles (PCA view)")
 
+
+library(ggplot2)
+
+# Seleziona solo il cluster 2 (quello in alto a destra)
+cluster_focus <- agg_df %>% filter(Cluster == 2)
+
+# Scatterplot delle PD (puoi cambiare gli assi per esplorare)
+ggplot(cluster_focus, aes(x = kdp_1mo, y = kdp_1yr)) +
+  geom_point(color = "darkgreen", size = 2) +
+  geom_text(aes(label = paste(country, gdesc, sep = " - ")), hjust = 0, vjust = 0, size = 3, check_overlap = TRUE) +
+  theme_minimal() +
+  labs(title = "Focus sul Cluster 2 (rischio più alto)",
+       x = "PD a 1 mese", y = "PD a 1 anno")
+
 # ---------- 9) Export ----------
 write_csv(agg_df, file.path(out_dir, "output_clusters.csv"))
 write_csv(cluster_summary, file.path(out_dir, "summary_clusters.csv"))
@@ -162,3 +224,16 @@ write_csv(top_sectors, file.path(out_dir, "top_sectors_per_cluster.csv"))
 message("=== DONE ===")
 message("k scelto: ", k_opt)
 message("File scritti in: ", normalizePath(out_dir))
+
+table(agg_df$Cluster)
+agg_df %>% filter(Cluster == 3)
+
+agg_df %>% filter(Cluster == 4)
+
+# Controlla quanti elementi ci sono per cluster
+table(agg_df$Cluster)
+
+# Visualizza il contenuto del cluster "sospetto"
+agg_df %>% filter(Cluster == 2)
+
+

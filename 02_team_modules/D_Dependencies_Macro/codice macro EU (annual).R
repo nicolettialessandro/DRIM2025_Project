@@ -66,9 +66,9 @@ unemp_df <- eurostat::get_eurostat("une_rt_m") %>%
   normalize_time() %>%
   dplyr::filter(
     geo %in% geo_vec,
-    sex == "T",
-    age == "Y15-74",
-    s_adj == "SA"
+    sex %in% c("T", "M", "F"),
+    age %in% c("Y15-74", "TOTAL", "Y_GE15"),
+    s_adj %in% c("SA", "NSA", "SCA")
   ) %>%
   add_iso3() %>%
   dplyr::transmute(
@@ -78,6 +78,8 @@ unemp_df <- eurostat::get_eurostat("une_rt_m") %>%
   ) %>%
   clip_period("date") %>%
   dplyr::arrange(iso, date)
+
+message("Unemployment data loaded: ", nrow(unemp_df), " observations")
 
 ## 2) CPI / HICP YoY (monthly)
 
@@ -212,11 +214,22 @@ if (nrow(gdp_q_df) > 0) {
 
 ## 6) GPR placeholder
 
-gpr_df <- tibble::tibble(
-  iso = character(),
-  date = as.Date(character()),
-  gpr = numeric()
-)
+library(readxl)
+library(dplyr)
+
+gpr_path <- "01_data_clean/GPR_data.xls"  # percorso corretto al file
+
+if (file.exists(gpr_path)) {
+  gpr_df <- read_excel(gpr_path) %>%
+    rename(date = month, gpr = GPR) %>%        # uniforma nomi
+    mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%  # converte stringa in data
+    filter(!is.na(gpr)) %>%
+    mutate(iso = "GLOBAL")                     # se è un GPR aggregato globale
+  
+  message("GPR data loaded from Excel: ", nrow(gpr_df), " observations")
+} else {
+  message("GPR Excel file not found, leaving gpr_df empty.")
+}
 
 ## Summary: key objects
 ## - unemp_df         (monthly)

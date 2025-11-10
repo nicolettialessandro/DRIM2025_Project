@@ -84,10 +84,9 @@ if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
   message("Silhouette suggerisce k = ", k_opt)
 }
 
-k_opt <- 4   # scelta analitica, compromesso tra separazione e granularità
-
-# ---------- 5) K-means ----------
+k_opt <- 3
 km <- kmeans(clust_data, centers = k_opt, nstart = 50)
+
 agg_df <- agg_df %>%
   mutate(Cluster = factor(km$cluster))
 
@@ -102,28 +101,7 @@ outlier_clusters <- cluster_sizes %>%
   filter(n == 1) %>%
   pull(Cluster)
 
-if (length(outlier_clusters) > 0) {
-  message("Rimossi i cluster outlier: ", paste(outlier_clusters, collapse = ", "))
-  
-  # Filtra via l’outlier
-  agg_df_clean <- agg_df %>%
-    filter(!Cluster %in% outlier_clusters)
-  
-  # Rifai il clustering con k = 3 (dopo aver tolto l'outlier)
-  kdp_cols <- grep("^kdp_", names(agg_df_clean), value = TRUE)
-  clust_data_clean <- scale(as.matrix(agg_df_clean %>% select(all_of(kdp_cols))))
-  
-  set.seed(123)
-  km3 <- kmeans(clust_data_clean, centers = 3, nstart = 50)
-  
-  # Aggiorna il dataframe con i nuovi cluster
-  agg_df <- agg_df_clean %>%
-    mutate(Cluster = factor(km3$cluster))
-  
-  message("Rieseguito K-means con k = 3 dopo rimozione outlier.")
-} else {
-  message("Nessun cluster outlier trovato — mantengo il clustering originale.")
-}
+
 
 # --- Silhouette plot per capire k ---
 library(cluster)
@@ -205,7 +183,7 @@ fviz_cluster(km_plot, data = clust_data, geom = "point", ellipse.type = "convex"
 library(ggplot2)
 
 # Seleziona solo il cluster 2 (quello in alto a destra)
-cluster_focus <- agg_df %>% filter(Cluster == 2)
+cluster_focus <- agg_df %>% filter(Cluster == 3)
 
 # Scatterplot delle PD (puoi cambiare gli assi per esplorare)
 ggplot(cluster_focus, aes(x = kdp_1mo, y = kdp_1yr)) +
@@ -236,4 +214,13 @@ table(agg_df$Cluster)
 # Visualizza il contenuto del cluster "sospetto"
 agg_df %>% filter(Cluster == 2)
 
+
+n_obs <- nrow(agg_df)
+cat("Numero effettivo di combinazioni paese–settore:", n_obs, "\n")
+
+agg_df %>%
+  summarise(
+    n_countries = n_distinct(country),
+    n_sectors = n_distinct(gdesc)
+  )
 

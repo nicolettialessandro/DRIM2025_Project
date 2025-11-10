@@ -74,7 +74,7 @@ library(scales)
 # ---------- 7) Tabella con nodi, community e colori ----------
 community_table <- data.frame(
   node = names(V(g)),
-  community = as.integer(V(g)$community)   # converte tipo membership
+  community = as.integer(V(g)$community)
 )
 
 # Separa in country e sector
@@ -82,24 +82,17 @@ community_table <- community_table %>%
   separate(node, into = c("country", "sector"), sep = "_", remove = FALSE) %>%
   arrange(community)
 
-# Assegna colori "leggibili" (nomi in inglese)
-color_names <- c("red", "orange", "yellow", "green", "turquoise", 
-                 "blue", "purple", "pink", "brown", "grey")
-
-# Se ci sono più di 10 community, ricicla i colori
+# Assegna una palette di colori alle community (stessa logica del plot)
 n_communities <- length(unique(V(g)$community))
-assigned_colors <- rep(color_names, length.out = n_communities)
-
-# Assegna il colore ad ogni community nel grafo
-V(g)$color <- assigned_colors[V(g)$community]
-
-# Crea tabella colori
-community_colors <- data.frame(
-  community = sort(unique(as.integer(V(g)$community))),
-  color = assigned_colors[sort(unique(as.integer(V(g)$community)))]
-)
+palette <- hue_pal()(n_communities)
+V(g)$color <- palette[V(g)$community]
 
 # Aggiungi i colori alla tabella
+community_colors <- data.frame(
+  community = sort(unique(as.integer(V(g)$community))),   # ✅ anche qui
+  color = palette[sort(unique(as.integer(V(g)$community)))]
+)
+
 community_table <- community_table %>%
   left_join(community_colors, by = "community")
 
@@ -107,9 +100,9 @@ community_table <- community_table %>%
 print(table(community_table$community))
 print(community_colors)
 
-# Sovrascrive il file esistente (stesso nome)
+# Sovrascrivi il file esistente
 write.csv(community_table,
           "02_team_modules/D_Dependencies_Analysis/community_members.csv",
           row.names = FALSE)
 
-message("✅ File aggiornato con colonna 'color' (nomi in inglese) sovrascritto in: 02_team_modules/D_Dependencies_Analysis/community_members.csv")
+message("✅ File aggiornato con colonna 'color' sovrascritto in: 02_team_modules/D_Dependencies_Analysis/community_members.csv")

@@ -1,6 +1,5 @@
 # ==========================================================
-# 03_clustering_segmentation.R
-# DRIM2025 Project – Credit Risk Clustering (clean & robust)
+# 03_clustering_segmentation.R  (versione finale – forza 3 cluster)
 # ==========================================================
 
 suppressPackageStartupMessages({
@@ -9,6 +8,7 @@ suppressPackageStartupMessages({
   library(cluster)
   library(factoextra)
   library(NbClust)
+  library(stringr)
 })
 
 set.seed(123)
@@ -22,6 +22,13 @@ ensure_dir(out_dir)
 # ---------- 1) Load cleaned data ----------
 data <- read_parquet("01_data_clean/output_features.parquet")
 
+# Normalizza campi chiave (spazi, maiuscole/minuscole)
+data <- data %>%
+  mutate(
+    country = trimws(as.character(country)),
+    gdesc   = str_squish(as.character(gdesc))
+  )
+
 # Controlli base
 stopifnot(all(c("country","gdesc") %in% names(data)))
 kdp_cols <- grep("^kdp_", names(data), value = TRUE)
@@ -32,117 +39,64 @@ agg_df <- data %>%
   group_by(country, gdesc) %>%
   summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop")
 
-# Rimuove colonne KDP costanti o completamente NA (evita problemi in scale/kmeans)
-is_all_na <- sapply(agg_df[kdp_cols], function(v) all(is.na(v)))
-if (any(is_all_na)) {
-  message("Rimossa/e colonna/e KDP tutta/e NA: ", paste(kdp_cols[is_all_na], collapse = ", "))
-  kdp_cols <- kdp_cols[!is_all_na]
+# ---------- 2B) Rimozione outlier robusta ----------
+is_cyp_hc <- with(
+  agg_df,
+  country == "CYP" & str_detect(str_to_lower(gdesc), "^health[\\s\\-]?care$")
+)
+n_out <- sum(is_cyp_hc, na.rm = TRUE)
+agg_df <- agg_df %>% filter(!is_cyp_hc)
+message("🧹 Rimosse ", n_out, " occorrenze di CYP - Health Care")
+
+# Rimuovi outlier LUX–Utilities
+agg_df <- agg_df %>% filter(!(country == "LUX" & gdesc == "Utilities"))
+message("🧹 Rimosso outlier: LUX - Utilities (distanza eccessiva dal centroide)")
+
+# Controllo finale
+if (any(with(agg_df, country == "CYP" & str_detect(str_to_lower(gdesc), "health")))) {
+  stop("⚠️ L'outlier CYP - Health Care è ancora presente dopo il filtro.")
 }
 
-# Se qualche colonna ha varianza ~0, rimuovila (kmeans si basa su distanza euclidea)
-near_zero_var <- function(x) isTRUE(all.equal(sd(x, na.rm = TRUE), 0))
-nzv <- sapply(agg_df[kdp_cols], near_zero_var)
-if (any(nzv)) {
-  message("Rimossa/e colonna/e KDP con varianza ~0: ", paste(kdp_cols[nzv], collapse = ", "))
-  kdp_cols <- kdp_cols[!nzv]
-}
-if (length(kdp_cols) < 2) stop("Servono almeno 2 orizzonti KDP non degeneri per il clustering.")
-
-# ---------- 3) Matrix for clustering ----------
-clust_mat <- agg_df %>%
-  select(all_of(kdp_cols)) %>%
-  as.matrix()
-
-# Standardizza (z-score)
+# ---------- 3) Matrix for clustering (senza outlier) ----------
+kdp_cols <- grep("^kdp_", names(agg_df), value = TRUE)
+clust_mat  <- agg_df %>% select(all_of(kdp_cols)) %>% as.matrix()
 clust_data <- scale(clust_mat)
 
-# ---------- 4) Determina k (NbClust + fallback silhouette) ----------
-k_opt <- NA_integer_
-
-# Prova NbClust (può fallire su alcuni dataset)
-nb_res <- try({
-  NbClust(clust_data, distance = "euclidean", min.nc = 2, max.nc = 10, method = "kmeans")
-}, silent = TRUE)
-
-if (!inherits(nb_res, "try-error")) {
-  tab <- table(nb_res$Best.nc[1, ])
-  k_opt <- as.numeric(names(which.max(tab)))
-  message("NbClust suggerisce k = ", k_opt)
-} else {
-  message("NbClust non disponibile/ha fallito: passo alla silhouette.")
-}
-
-# Se NbClust ha fallito o ha dato qualcosa di strano, usa silhouette
-if (is.na(k_opt) || k_opt < 2 || k_opt > 10) {
-  sil_scores <- c()
-  for (k in 2:10) {
-    km_tmp <- kmeans(clust_data, centers = k, nstart = 25)
-    sil <- silhouette(km_tmp$cluster, dist(clust_data))
-    sil_scores <- c(sil_scores, mean(sil[, "sil_width"]))
-  }
-  k_opt <- which.max(sil_scores) + 1  # +1 perché parte da 2
-  message("Silhouette suggerisce k = ", k_opt)
-}
-
+# ---------- 4) Forza manualmente il numero di cluster ----------
 k_opt <- 3
-km <- kmeans(clust_data, centers = k_opt, nstart = 50)
+message("🔧 Forzo manualmente k = ", k_opt)
 
-agg_df <- agg_df %>%
-  mutate(Cluster = factor(km$cluster))
+# ---------- 5) K-means robusto ----------
+set.seed(123)
+km <- kmeans(clust_data, centers = k_opt, nstart = 100, algorithm = "Lloyd")
 
-# ---------- 5B) Rimozione outlier e rifacimento clustering ----------
-
-# Conta quante osservazioni ha ciascun cluster
-cluster_sizes <- agg_df %>%
-  count(Cluster, name = "n")
-
-# Trova i cluster con solo 1 osservazione (outlier)
-outlier_clusters <- cluster_sizes %>%
-  filter(n == 1) %>%
-  pull(Cluster)
-
-
-
-# --- Silhouette plot per capire k ---
-library(cluster)
-sil_means <- c()
-for (k in 2:10) {
-  km <- kmeans(clust_data, centers = k, nstart = 25)
-  ss <- silhouette(km$cluster, dist(clust_data))
-  sil_means <- c(sil_means, mean(ss[, "sil_width"]))
+# Controlla se i cluster sono davvero 3
+print(table(km$cluster))
+if (length(unique(km$cluster)) < k_opt) {
+  warning("⚠️ Uno o più cluster risultano vuoti: i dati sono troppo concentrati per k = 3.")
 }
-sil_df <- data.frame(k = 2:10, silhouette = sil_means)
 
-ggplot(sil_df, aes(k, silhouette)) +
-  geom_line(color = "blue") +
-  geom_point() +
-  theme_minimal() +
-  labs(title = "Silhouette scores per k", x = "Number of clusters", y = "Average silhouette width")
+# ---------- 6) Aggiungi cluster ai dati ----------
+agg_df <- agg_df %>% mutate(Cluster = factor(km$cluster))
 
-ggsave("02_team_modules/C_Clustering_Segmentation/silhouette_plot.png", width = 8, height = 5)
+# ---------- 7) PCA plot finale ----------
+p1 <- fviz_cluster(km, data = clust_data, geom = "point", ellipse.type = "convex") +
+  ggtitle(paste("Clustering of Country–Sector Risk Profiles (k =", k_opt, ")"))
+print(p1)
 
-# ---------- 6) Ordinamento cluster per rischio medio ----------
+# ---------- 8) Ordinamento cluster per rischio medio ----------
 cluster_summary <- agg_df %>%
   group_by(Cluster) %>%
   summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
   mutate(PD_mean_overall = rowMeans(across(all_of(kdp_cols)), na.rm = TRUE)) %>%
   arrange(PD_mean_overall)
 
-# Mappa i livelli (Cluster 1 = più basso rischio, ... = più alto rischio)
 level_map <- setNames(seq_len(nrow(cluster_summary)), cluster_summary$Cluster)
 agg_df <- agg_df %>%
   mutate(Cluster = factor(level_map[Cluster], levels = seq_len(nrow(cluster_summary))))
 
-# Ricalcola il summary con i nuovi livelli ordinati
-cluster_summary <- agg_df %>%
-  group_by(Cluster) %>%
-  summarise(across(all_of(kdp_cols), \(x) mean(x, na.rm = TRUE)), .groups = "drop") %>%
-  mutate(PD_mean_overall = rowMeans(across(all_of(kdp_cols)), na.rm = TRUE)) %>%
-  arrange(as.integer(Cluster))
-
-# ---------- 7) Paesi e Settori più rappresentati ----------
+# ---------- 9) Top paesi/settori ----------
 top_n <- 25
-
 top_countries <- agg_df %>%
   count(Cluster, country, name = "n") %>%
   group_by(Cluster) %>%
@@ -157,8 +111,7 @@ top_sectors <- agg_df %>%
   arrange(Cluster, desc(n)) %>%
   ungroup()
 
-# ---------- 8) Grafici ----------
-# (a) PD medie per orizzonte
+# ---------- 10) Grafico PD medie ----------
 pd_long <- cluster_summary %>%
   select(Cluster, all_of(kdp_cols)) %>%
   pivot_longer(cols = all_of(kdp_cols), names_to = "Horizon", values_to = "PD")
@@ -170,57 +123,15 @@ p_pd <- ggplot(pd_long, aes(Horizon, PD, group = Cluster, color = Cluster)) +
   labs(title = "Average Probability of Default by Cluster",
        subtitle = "Cluster ordinati dal rischio medio più basso (1) al più alto",
        y = "PD media (%)", x = "Orizzonte")
-
 print(p_pd)
 
-# (b) PCA + cluster (solo per visualizzazione)
-# NB: rifacciamo un kmeans sui livelli riordinati per coerenza visiva
-km_plot <- kmeans(clust_data, centers = nlevels(agg_df$Cluster), nstart = 50)
-fviz_cluster(km_plot, data = clust_data, geom = "point", ellipse.type = "convex") +
-  ggtitle("Clustering of Country–Sector Risk Profiles (PCA view)")
-
-
-library(ggplot2)
-
-# Seleziona solo il cluster 2 (quello in alto a destra)
-cluster_focus <- agg_df %>% filter(Cluster == 3)
-
-# Scatterplot delle PD (puoi cambiare gli assi per esplorare)
-ggplot(cluster_focus, aes(x = kdp_1mo, y = kdp_1yr)) +
-  geom_point(color = "darkgreen", size = 2) +
-  geom_text(aes(label = paste(country, gdesc, sep = " - ")), hjust = 0, vjust = 0, size = 3, check_overlap = TRUE) +
-  theme_minimal() +
-  labs(title = "Focus sul Cluster 2 (rischio più alto)",
-       x = "PD a 1 mese", y = "PD a 1 anno")
-
-# ---------- 9) Export ----------
+# ---------- 11) Export ----------
 write_csv(agg_df, file.path(out_dir, "output_clusters.csv"))
 write_csv(cluster_summary, file.path(out_dir, "summary_clusters.csv"))
 write_csv(top_countries, file.path(out_dir, "top_countries_per_cluster.csv"))
 write_csv(top_sectors, file.path(out_dir, "top_sectors_per_cluster.csv"))
 
 message("=== DONE ===")
-message("k scelto: ", k_opt)
 message("File scritti in: ", normalizePath(out_dir))
-
-table(agg_df$Cluster)
-agg_df %>% filter(Cluster == 3)
-
-agg_df %>% filter(Cluster == 4)
-
-# Controlla quanti elementi ci sono per cluster
-table(agg_df$Cluster)
-
-# Visualizza il contenuto del cluster "sospetto"
-agg_df %>% filter(Cluster == 2)
-
-
-n_obs <- nrow(agg_df)
-cat("Numero effettivo di combinazioni paese–settore:", n_obs, "\n")
-
-agg_df %>%
-  summarise(
-    n_countries = n_distinct(country),
-    n_sectors = n_distinct(gdesc)
-  )
-
+message("Numero combinazioni paese–settore: ", nrow(agg_df))
+message("Cluster:"); print(table(agg_df$Cluster))

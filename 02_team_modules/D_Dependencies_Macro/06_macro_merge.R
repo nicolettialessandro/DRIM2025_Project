@@ -41,10 +41,43 @@ macro_df <- macro_df %>%
     .groups = "drop"
   )
 
-# --- Aggiungi GPR (globale) ---
+# --- Aggiungi GPR country-specific (da formato wide a long) ---
 if (nrow(gpr_df) > 0) {
+  
+  message("📋 Colonne originali in gpr_df: ", paste(names(gpr_df)[1:15], collapse = ", "), " ...")
+  
+  # Porta tutto in minuscolo per evitare errori di case sensitivity
+  names(gpr_df) <- tolower(names(gpr_df))
+  
+  # Controllo presenza colonna data (date o time)
+  if ("time" %in% names(gpr_df) && !"date" %in% names(gpr_df)) {
+    gpr_df <- gpr_df %>% rename(date = time)
+  }
+  if (!"date" %in% names(gpr_df)) {
+    stop("❌ Nessuna colonna 'date' trovata nel file GPR (nemmeno 'time').")
+  }
+  
+  # Seleziona solo le colonne di interesse: date + GPRC_*
+  gpr_long <- gpr_df %>%
+    select(date, starts_with("gprc_")) %>%
+    pivot_longer(
+      cols = starts_with("gprc_"),
+      names_to = "iso",
+      values_to = "gpr"
+    ) %>%
+    mutate(
+      iso = str_remove(iso, "^gprc_"),
+      iso = toupper(iso),
+      date = as.Date(date)
+    )
+  
+  message("✅ GPR trasformato in formato long: ", nrow(gpr_long), " righe")
+  
+  # Unisci al macro_df
   macro_df <- macro_df %>%
-    left_join(select(gpr_df, date, gpr), by = "date")
+    left_join(gpr_long, by = c("iso", "date"))
+  
+  message("✅ Join GPR completato: ", sum(!is.na(macro_df$gpr)), " osservazioni con valori GPR")
 }
 
 # ---------- 3) PD medie mensili per country–sector ----------
@@ -54,10 +87,14 @@ pd_df <- pd_base %>%
   transmute(
     iso = toupper(country),
     gdesc = as.character(gdesc),
-    Cluster = as.factor(Cluster),
+    # Rinomina i cluster per leggibilità
+    Cluster = recode(as.character(Cluster),
+                     "1" = "Low risk",
+                     "2" = "High risk"),
     date = floor_date(as.Date(data_date), "month"),
     q_1y = as.numeric(q_1y)
   ) %>%
+  
   group_by(iso, gdesc, Cluster, date) %>%
   summarise(PD_mean = mean(q_1y, na.rm = TRUE), .groups = "drop") %>%
   filter(!is.na(iso), !is.na(gdesc), !is.na(date)) %>%
@@ -81,6 +118,9 @@ write_csv(
 # ---------- 6) Salva ----------
 write_parquet(panel_df, "02_team_modules/D_Dependencies_Macro/panel_df.parquet")
 message("✅ Saved: 02_team_modules/D_Dependencies_Macro/panel_df.parquet")
+
+write_parquet(panel_df, "02_team_modules/D_Dependencies_Macro/panel_df_risk_named.parquet")
+message("✅ Saved: panel_df_risk_named.parquet")
 
 # ---------- 7) Riepilogo per cluster ----------
 summ <- panel_df %>%

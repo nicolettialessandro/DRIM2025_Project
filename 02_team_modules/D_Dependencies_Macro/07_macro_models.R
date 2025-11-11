@@ -1,6 +1,7 @@
 # ==========================================================
-# 07_macro_models.R — Simple Macro–PD Regression Models
+# 07_macro_models.R — Two-Way Fixed Effects (Panel Model)
 # ==========================================================
+
 suppressPackageStartupMessages({
   library(arrow)
   library(dplyr)
@@ -10,12 +11,14 @@ suppressPackageStartupMessages({
   library(plm)
   library(readr)
   library(ggplot2)
+  library(lmtest)
+  library(sandwich)
 })
 
-# === Load panel ===
+# === 1️⃣ Load panel ===
 panel_df <- read_parquet("02_team_modules/D_Dependencies_Macro/panel_df.parquet")
 
-# === Clean ===
+# === 2️⃣ Clean ===
 panel_df <- panel_df %>%
   mutate(
     iso = toupper(as.character(iso)),
@@ -31,42 +34,67 @@ panel_df <- panel_df %>%
   ) %>%
   filter(!is.na(PD_mean), !is.na(iso), !is.na(date))
 
-# === Create z-scores ===
-scale_safe <- function(x) if (sd(x, na.rm=TRUE)==0) x*NA else as.numeric(scale(x))
+# === 3️⃣ Z-score delle variabili macro ===
+scale_safe <- function(x) {
+  s <- sd(x, na.rm = TRUE)
+  if (is.na(s) || s == 0) {
+    return(rep(NA, length(x)))
+  } else {
+    return(as.numeric(scale(x)))
+  }
+}
+
 panel_df <- panel_df %>%
   mutate(
-    z_unemp = scale_safe(unemployment_rate),
-    z_infl = scale_safe(hicp_yoy),
-    z_yield = scale_safe(yield_10y),
+    z_unemp  = scale_safe(unemployment_rate),
+    z_infl   = scale_safe(hicp_yoy),
+    z_yield  = scale_safe(yield_10y),
     z_spread = scale_safe(credit_spread_bp),
-    z_gdp = scale_safe(gdp),
-    z_gpr = scale_safe(gpr)
+    z_gdp    = scale_safe(gdp),
+    z_gpr    = scale_safe(gpr)
   )
 
-# === OLS ===
-ols <- lm(PD_mean ~ z_unemp + z_infl + z_yield + z_spread + z_gdp + z_gpr, data = panel_df)
-write_csv(tidy(ols), "02_team_modules/D_Dependencies_Macro/ols_coefs.csv")
-write_csv(glance(ols), "02_team_modules/D_Dependencies_Macro/ols_fit.csv")
-message("✅ OLS done")
+# === 4️⃣ Crea panel data frame (plm) ===
+panel_data <- pdata.frame(panel_df, index = c("iso", "date"))
 
-# === Panel FE per paese (aggregato) ===
-agg_country <- panel_df %>%
-  group_by(iso, date) %>%
-  summarise(across(c(PD_mean, starts_with("z_")), ~ mean(.x, na.rm=TRUE)), .groups="drop")
+# === 5️⃣ Two-Way Fixed Effects (country + time) ===
+fe_tw <- plm(
+  PD_mean ~ z_unemp + z_infl + z_yield + z_spread + z_gdp + z_gpr,
+  data = panel_data,
+  model = "within",
+  effect = "twoways"
+)
 
-panel_data <- pdata.frame(agg_country, index = c("iso", "date"))
-fe_country <- plm(PD_mean ~ z_unemp + z_infl + z_yield + z_spread + z_gdp + z_gpr,
-                  data = panel_data, model = "within", effect = "individual")
-write_csv(tidy(fe_country), "02_team_modules/D_Dependencies_Macro/panel_FE_country.csv")
-message("✅ Panel FE (country) done")
+panel_df %>%
+  group_by(iso) %>%
+  summarise(sd_spread = sd(credit_spread_bp, na.rm=TRUE)) %>%
+  arrange(sd_spread)
 
-# === Plot ===
-ols_tidy <- tidy(ols)
-ggplot(ols_tidy %>% filter(term != "(Intercept)"),
+# === 6️⃣ Coefficienti robusti (clustered by country) ===
+coefs_tw <- coeftest(fe_tw, vcov = vcovHC(fe_tw, type = "HC1", cluster = "group"))
+
+# === 7️⃣ Salvataggio risultati ===
+tidy_fe <- tidy(coefs_tw)
+write_csv(tidy_fe, "02_team_modules/D_Dependencies_Macro/panel_FE_twoways_coefs.csv")
+
+fit_fe <- glance(fe_tw)
+write_csv(fit_fe, "02_team_modules/D_Dependencies_Macro/panel_FE_twoways_fit.csv")
+
+message("✅ Two-Way Fixed Effects model completed")
+
+# === 8️⃣ Plot dei coefficienti ===
+ggplot(tidy_fe %>% filter(term != "(Intercept)"),
        aes(x = reorder(term, estimate), y = estimate)) +
-  geom_col(fill = "steelblue") + coord_flip() +
-  labs(title = "Macro Drivers of PD", x = NULL, y = "Coefficient") +
-  theme_minimal()
-ggsave("02_team_modules/D_Dependencies_Macro/fig_ols_betas.png", width = 7, height = 5, dpi = 150)
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = estimate - 1.96 * std.error,
+                    ymax = estimate + 1.96 * std.error),
+                width = 0.2, color = "black") +
+  coord_flip() +
+  theme_minimal() +
+  labs(title = "Macro Drivers of Default Probability (Two-Way FE)",
+       x = NULL, y = "Coefficient (Robust SE)")
 
-message("🎉 Finished successfully")
+ggsave("02_team_modules/D_Dependencies_Macro/fig_FE_twoways_betas.png",
+       width = 7, height = 5, dpi = 150)
+
+message("🎉 Finished successfully — Two-Way FE results saved.")

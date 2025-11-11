@@ -238,3 +238,20 @@ if (file.exists(gpr_path)) {
 ## - credit_spread_df (monthly, if DEU yield available)
 ## - gdp_m_df         (monthly proxy from quarterly)
 ## - gpr_df           (placeholder)
+
+# === SAVE CLEANED MACRO DATA TO PARQUET ===
+library(arrow)
+
+dir.create("01_data_clean/macro", recursive = TRUE, showWarnings = FALSE)
+
+write_parquet(unemp_df,         "01_data_clean/macro/unemployment.parquet")
+write_parquet(cpi_df,           "01_data_clean/macro/inflation.parquet")
+write_parquet(yields_10y_df,    "01_data_clean/macro/yields_10y.parquet")
+write_parquet(credit_spread_df, "01_data_clean/macro/credit_spreads.parquet")
+write_parquet(gdp_m_df,         "01_data_clean/macro/gdp.parquet")
+
+if (exists("gpr_df") && nrow(gpr_df) > 0) {
+  write_parquet(gpr_df, "01_data_clean/macro/gpr.parquet")
+}
+
+message("✅ All macro datasets saved successfully in 01_data_clean/macro/")

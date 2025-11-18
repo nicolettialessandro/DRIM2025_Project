@@ -1,5 +1,5 @@
 # ============================================================
-# PACKAGES
+# 1. PACKAGES
 # ============================================================
 pkgs <- c("dplyr","tidyr","lubridate","stringr","purrr","ggplot2",
           "eurostat","quantmod","zoo","scales","readr","arrow","TTR","rlang")
@@ -11,54 +11,73 @@ options(eurostat_cache = TRUE)
 try_silent <- function(expr) try(expr, silent = TRUE)
 
 # ============================================================
-# YOUR COUNTRIES + USA
+# 2. YOUR COUNTRIES + USA
 # ============================================================
 country_list <- c("AUT","BEL","CYP","DEU","DNK","ESP","EST","FIN","FRA","GBR",
                   "GRC","HRV","IRL","ITA","LUX","MLT","NLD","NOR","POL","PRT",
                   "SVK","SVN","SWE","CHE","USA")
 
 # ============================================================
-# READ PD PARQUET + DATE NORMALIZATION
+# 3. READ DATA & NORMALIZE (ADATTATO AL TUO FILE)
 # ============================================================
-data_path <- "C:\Users\Gaia\Documents\magistrale\AMUniversite\credit risk\DRIM2025_Project0\02_team_modules\B_Descriptive_Analysis\pd_country_monthly.csv"
-pd_raw <- arrow::read_parquet(data_path)
+data_path <- "pd_country_monthly.csv"
+message("Lettura file: ", data_path)
 
-# detect date col
-date_col <- dplyr::case_when(
-  "data_date"  %in% names(pd_raw) ~ "data_date",
-  "month_year" %in% names(pd_raw) ~ "month_year",
-  TRUE ~ NA_character_
-)
-if (is.na(date_col)) stop("No date column found. Expect `data_date` or `month_year`.")
+pd_raw <- readr::read_csv(data_path, show_col_types = FALSE)
 
+# Controllo base: verifichiamo che le colonne chiave esistano
+required_cols <- c("country", "date")
+if (!all(required_cols %in% names(pd_raw))) {
+  stop("Il file non contiene le colonne 'country' e 'date'. Colonne trovate: ", 
+       paste(names(pd_raw), collapse=", "))
+}
+
+# Pulizia Date
 pd <- pd_raw %>%
-  mutate(date_raw = .data[[date_col]]) %>%
   mutate(
     date = dplyr::case_when(
-      inherits(date_raw, "Date")                ~ as.Date(date_raw),
-      is.character(date_raw) & nchar(date_raw)==7 ~ lubridate::ym(date_raw),
-      TRUE                                       ~ suppressWarnings(as.Date(date_raw))
+      inherits(date, "Date")                ~ as.Date(date),
+      is.character(date) & nchar(date) == 7 ~ lubridate::ym(date), # Caso "2020-01"
+      is.character(date)                    ~ lubridate::ymd(date), # Caso "2020-01-01"
+      TRUE                                  ~ suppressWarnings(as.Date(date))
     )
   ) %>%
   mutate(date = floor_date(date, "month")) %>%
   filter(country %in% country_list)
 
-# choose PD horizon (your lowercase names)
+# ============================================================
+# 4. SELECT PD COLUMN (q_1y, q_6m, etc.)
+# ============================================================
 pd_names_l <- tolower(names(pd))
-pref <- c("kdp_1yr","kdp_1mo","kdp_3mo","kdp_6mo","kdp_2yr","kdp_3yr","kdp_5yr","kdp_10yr")
-cand <- intersect(pref, pd_names_l)
-if (length(cand)==0) stop("No KDP_* columns found in your dataset.")
-PD_COL <- names(pd)[match(cand[1], pd_names_l)]
-message("Using PD column: ", PD_COL)
 
-# aggregate to country–month (median across firms)
+# Lista di preferenza aggiornata con i TUOI nomi colonna (q_*)
+# Se preferisci analizzare il 5 anni, sposta "q_5y" all'inizio della lista
+pref <- c("q_1y", "q_1m", "q_6m", "q_3y", "q_5y")
+
+cand <- intersect(pref, pd_names_l)
+if (length(cand) == 0) {
+  stop("Errore: Nessuna colonna PD trovata. Cercavo: ", paste(pref, collapse=", "), 
+       ". Trovato nel file: ", paste(names(pd), collapse=", "))
+}
+
+PD_COL <- names(pd)[match(cand[1], pd_names_l)]
+message(">>> SUCCESSO! Utilizzo la colonna PD: ", PD_COL)
+
+# ============================================================
+# 5. AGGREGATE (Country-Month Median)
+# ============================================================
+# Rinominiamo la colonna scelta in "PD" generico per il resto dello script
 pd_country_agg <- pd %>%
   filter(!is.na(country), !is.na(date)) %>%
   group_by(country, date) %>%
   summarize(PD = median(.data[[PD_COL]], na.rm = TRUE),
-            n_companies = n(), .groups = "drop")
+            n_companies = n(), .groups = "drop") %>%
+  arrange(country, date)
 
+# Lista finale dei paesi presenti nel file
 keep_countries <- intersect(country_list, unique(pd_country_agg$country))
+message("Paesi processati: ", length(keep_countries))
+
 
 # ============================================================
 # ISO3 -> Eurostat code mapping
@@ -445,6 +464,6 @@ print(plot_scatter(df, "USA", "Unemployment"))
 print(plot_rolling_corr(df, "USA", "Unemployment", k = 12))
 
 print(plot_overlay(df, "ITA", "CPI_YoY"))
-print(plot_overlay(eu_macro_all, "AUT", "Y10_Gov"))
+print(plot_overlay(df, "AUT", "Y10_Gov"))
 print(plot_overlay(df, "FRA", "Credit_Spread"))
 print(plot_overlay(df, "GBR", "GPR_Global"))   # will work if GPR was fetched/merged

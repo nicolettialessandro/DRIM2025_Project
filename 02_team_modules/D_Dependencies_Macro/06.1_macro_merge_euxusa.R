@@ -44,42 +44,39 @@ macro_df <- macro_df %>%
 # --- Aggiungi GPR country-specific (da formato wide a long) ---
 if (nrow(gpr_df) > 0) {
   
-  message("📋 Colonne originali in gpr_df: ", paste(names(gpr_df)[1:15], collapse = ", "), " ...")
+  # La lettura del messaggio è cambiata, mostra le colonne già in formato long
+  message("📋 Colonne originali in gpr_df: ", paste(names(gpr_df), collapse = ", "))
   
-  # Porta tutto in minuscolo per evitare errori di case sensitivity
+  # Porta i nomi delle colonne a minuscolo per evitare problemi di join
   names(gpr_df) <- tolower(names(gpr_df))
   
-  # Controllo presenza colonna data (date o time)
-  if ("time" %in% names(gpr_df) && !"date" %in% names(gpr_df)) {
-    gpr_df <- gpr_df %>% rename(date = time)
-  }
-  if (!"date" %in% names(gpr_df)) {
-    stop("❌ Nessuna colonna 'date' trovata nel file GPR (nemmeno 'time').")
+  # Verifica che le colonne chiave necessarie siano presenti dopo la lettura da Parquet
+  required_cols <- c("iso", "date", "gpr")
+  if (!all(required_cols %in% names(gpr_df))) {
+    stop(paste0("❌ File GPR non nel formato corretto. Mancano le colonne: ", 
+                paste(setdiff(required_cols, names(gpr_df)), collapse = ", ")))
   }
   
-  # Seleziona solo le colonne di interesse: date + GPRC_*
-  gpr_long <- gpr_df %>%
-    select(date, starts_with("gprc_")) %>%
-    pivot_longer(
-      cols = starts_with("gprc_"),
-      names_to = "iso",
-      values_to = "gpr"
-    ) %>%
+  # Prepara gpr_df per il join (assicurati che i tipi siano corretti)
+  gpr_final <- gpr_df %>%
     mutate(
-      iso = str_remove(iso, "^gprc_"),
-      iso = toupper(iso),
-      date = as.Date(date)
-    )
+      iso = toupper(iso), # Armonizza le maiuscole
+      date = as.Date(date) # Armonizza il tipo di data
+    ) %>%
+    # Se ci sono duplicati (non dovrebbero esserci), deduplica prendendo la media
+    group_by(iso, date) %>%
+    summarise(gpr = mean(gpr, na.rm = TRUE), .groups = "drop")
   
-  message("✅ GPR trasformato in formato long: ", nrow(gpr_long), " righe")
+  # *** RIMOSSA LA SEZIONE PIVOT_LONGER INUTILE ***
+  
+  message("✅ GPR pronto per il join: ", nrow(gpr_final), " righe")
   
   # Unisci al macro_df
   macro_df <- macro_df %>%
-    left_join(gpr_long, by = c("iso", "date"))
+    left_join(gpr_final, by = c("iso", "date"))
   
   message("✅ Join GPR completato: ", sum(!is.na(macro_df$gpr)), " osservazioni con valori GPR")
 }
-
 # ---------- 2bis) Aggiungi macro USA da Excel ----------
 suppressPackageStartupMessages({ library(readxl); library(stringr) })
 

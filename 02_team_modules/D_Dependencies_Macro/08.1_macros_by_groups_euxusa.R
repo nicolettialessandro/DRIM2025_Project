@@ -32,7 +32,7 @@ panel <- panel %>%
   filter(is.finite(pd_mean))
 
 # === 1.5) Integra macro USA da Excel ===
-usa_path <- "C:/Users/Gaia/Documents/magistrale/AMUniversite/credit risk/DRIM2025_Project0/01_data_clean/macro"
+usa_path <- "01_data_clean/macro"
 
 pick_date_col <- function(df) {
   nms <- tolower(names(df))

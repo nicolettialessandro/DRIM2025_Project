@@ -2,7 +2,7 @@
 # 06_macro_merge.R  —  Build panel (PD + Macro)
 # ==========================================================
 suppressPackageStartupMessages({
-  library(arrow); library(dplyr); library(tidyr); library(lubridate); library(readr)
+  library(arrow); library(dplyr); library(tidyr); library(lubridate); library(readr); library(stringr)
 })
 
 dir.create("02_team_modules/D_Dependencies_Macro", recursive = TRUE, showWarnings = FALSE)
@@ -84,7 +84,7 @@ if (nrow(gpr_df) > 0) {
 suppressPackageStartupMessages({ library(readxl); library(stringr) })
 
 # Usa slash in avanti per evitare problemi di escape su Windows
-usa_path <- "C:/Users/Gaia/Documents/magistrale/AMUniversite/credit risk/DRIM2025_Project0/01_data_clean/macro"
+usa_path <- "01_data_clean/macro"
 
 # --- utility: trova e normalizza la colonna data ---
 pick_date_col <- function(df) {

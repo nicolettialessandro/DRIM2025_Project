@@ -39,7 +39,7 @@ panel_df <- panel_df %>%
 
 # === 2bis) Integra le macro USA da Excel e fai join su (iso,date) ===
 # (Usa questo blocco quando le macro USA non erano state caricate nel panel precedente)
-usa_path <- "C:/Users/Gaia/Documents/magistrale/AMUniversite/credit risk/DRIM2025_Project0/01_data_clean/macro"
+usa_path <- "01_data_clean/macro"
 
 # Utility per riconoscere la colonna data anche se ha nomi atipici
 pick_date_col <- function(df) {

@@ -217,7 +217,7 @@ if (nrow(gdp_q_df) > 0) {
 library(readxl)
 library(dplyr)
 
-gpr_path <- "01_data_clean/GPR_data.xls"  # percorso corretto al file
+gpr_path <- "01_data_clean/GPR_dataclean.xls"  # percorso corretto al file
 
 if (file.exists(gpr_path)) {
   gpr_df <- read_excel(gpr_path) %>%

@@ -1,9 +1,9 @@
 # ==========================================================
-# 05_dependencies_clean.R
-# DRIM2025 Project – Risk Dependencies (Correlation Network)
+# 05_dependencies_clean.R — DRIM2025 Correlation Network
 # ==========================================================
+
 out_dir <- "02_team_modules/D_Dependencies_Analysis"
-if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 suppressPackageStartupMessages({
   library(arrow)
@@ -11,98 +11,155 @@ suppressPackageStartupMessages({
   library(tidyr)
   library(igraph)
   library(ggraph)
+  library(ggrepel)
   library(ggplot2)
 })
 
-# ---------- 1) Carica dati ----------
+# ---------- 1) Load data ----------
 df <- read_parquet("01_data_clean/output_features_with_cluster.parquet")
 
-# Verifica colonne chiave
-stopifnot(all(c("country", "gdesc", "q_1y") %in% names(df)))
+stopifnot(all(c("country", "gdesc", "q_1y", "Cluster") %in% names(df)))
 
-# ---------- 2) Costruisci matrice PD (paese-settore × tempo) ----------
+# ---------- 2) Build PD matrix (country–sector × time) ----------
 pd_matrix <- df %>%
   group_by(country, gdesc, data_date) %>%
   summarise(PD = mean(q_1y, na.rm = TRUE), .groups = "drop") %>%
-  unite("id", country, gdesc, remove = FALSE) %>%
+  unite("node", country, gdesc, sep = "_", remove = FALSE) %>%
   pivot_wider(names_from = data_date, values_from = PD)
 
-# Rimuove colonne non numeriche
-row_names <- pd_matrix$id
-pd_matrix <- pd_matrix %>% select(-id, -country, -gdesc)
-pd_matrix <- as.data.frame(pd_matrix)
-rownames(pd_matrix) <- row_names
+rownames_vec <- pd_matrix$node
 
-# ---------- 3) Calcola matrice di correlazione ----------
-# ---------- 3) Calcola matrice di correlazione ----------
+pd_matrix <- pd_matrix %>% 
+  select(-node, -country, -gdesc)
+
+pd_matrix <- as.data.frame(pd_matrix)
+rownames(pd_matrix) <- rownames_vec
+
+# ---------- 3) Correlation matrix ----------
+cor_mat <- cor(t(pd_matrix), use = "pairwise.complete.obs")
+cor_mat[!is.finite(cor_mat)] <- 0
+
+# ---------- 4) Threshold ----------
+thr <- 0.70
+
 cor_mat <- cor(t(pd_matrix), use = "pairwise.complete.obs")
 
-# Sostituisce eventuali NaN o Inf con 0
+# Apply threshold
+cor_mat[abs(cor_mat) < thr] <- 0
+
+# Remove negative weights – Louvain requires non-negative
+cor_mat[cor_mat < 0] <- 0
+
+# Remove NaN/Inf
 cor_mat[!is.finite(cor_mat)] <- 0
 
-# Applica soglia (solo correlazioni forti)
-# ---------- 4) Applica soglia e rimuovi correlazioni negative ----------
-threshold <- 0.7
+# ---------- 5) Graph ----------
+g <- graph_from_adjacency_matrix(cor_mat, mode = "undirected",
+                                 weighted = TRUE, diag = FALSE)
 
-# Mantieni solo correlazioni positive e forti
-cor_mat[cor_mat < threshold] <- 0
-cor_mat[!is.finite(cor_mat)] <- 0
-
-# ---------- 4) Applica soglia (solo correlazioni forti) ----------
-threshold <- 0.7
-cor_mat[abs(cor_mat) < threshold] <- 0
-
-# ---------- 5) Crea grafo delle correlazioni ----------
-g <- graph_from_adjacency_matrix(cor_mat, mode = "undirected", weighted = TRUE, diag = FALSE)
-
-# Rimuove nodi isolati (senza legami)
 g <- delete.vertices(g, degree(g) == 0)
 
-# ---------- 6) Community detection (Louvain) ----------
+# ---------- 6) Community detection ----------
 comm <- cluster_louvain(g)
 V(g)$community <- membership(comm)
 
-# Controllo
-cat("Numero di nodi nel grafo:", vcount(g), "\n")
-cat("Numero di community trovate:", length(unique(V(g)$community)), "\n")
-
-library(tidyr)
-library(dplyr)
-library(igraph)
-library(scales)
-
-# ---------- 7) Tabella con nodi, community e colori ----------
+# ---------- 7) Add attributes (country, sector, cluster) ----------
 community_table <- data.frame(
   node = names(V(g)),
   community = as.integer(V(g)$community)
-)
+) %>%
+  separate(node, into = c("country", "sector"), sep = "_", remove = FALSE)
 
-# Separa in country e sector
+cluster_map <- df %>%
+  mutate(node = paste(country, gdesc, sep = "_")) %>%
+  distinct(node, Cluster)
+
 community_table <- community_table %>%
-  separate(node, into = c("country", "sector"), sep = "_", remove = FALSE) %>%
-  arrange(community)
+  left_join(cluster_map, by = "node")
 
-# Assegna una palette di colori alle community (stessa logica del plot)
-n_communities <- length(unique(V(g)$community))
-palette <- hue_pal()(n_communities)
+# Write attributes into graph
+V(g)$country <- community_table$country
+V(g)$sector  <- community_table$sector
+V(g)$Cluster <- recode(as.character(community_table$Cluster),
+                       "1" = "Low risk",
+                       "2" = "High risk")
+
+palette <- scales::hue_pal()(length(unique(V(g)$community)))
 V(g)$color <- palette[V(g)$community]
 
-# Aggiungi i colori alla tabella
-community_colors <- data.frame(
-  community = sort(unique(as.integer(V(g)$community))),   # ✅ anche qui
-  color = palette[sort(unique(as.integer(V(g)$community)))]
-)
-
-community_table <- community_table %>%
-  left_join(community_colors, by = "community")
-
-# Mostra riepilogo
-print(table(community_table$community))
-print(community_colors)
-
-# Sovrascrivi il file esistente
 write.csv(community_table,
-          "02_team_modules/D_Dependencies_Analysis/community_members.csv",
+          file.path(out_dir, "community_members.csv"),
           row.names = FALSE)
 
-message("✅ File aggiornato con colonna 'color' sovrascritto in: 02_team_modules/D_Dependencies_Analysis/community_members.csv")
+# ==========================================================
+# 8) PLOTS (4 versioni pulite)
+# ==========================================================
+
+# ==========================================================
+# 9) FOUR CLEAN GRAPH OPTIONS FOR PRESENTATION
+# ==========================================================
+
+set.seed(123)
+
+# 1) Basic Community Graph
+p_comm <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey70") +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_manual(values = palette, name = "Community") +
+  theme_void() +
+  ggtitle("Correlation Network — Communities")
+
+ggsave(file.path(out_dir, "network_1_communities.png"),
+       p_comm, width = 12, height = 10, dpi = 150)
+
+
+# 2) Community Graph + Country Labels
+p_country <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey70") +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  geom_node_text(aes(label = country), size = 3, alpha = 0.7, repel = TRUE) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_manual(values = palette, name = "Community") +
+  theme_void() +
+  ggtitle("Correlation Network — Country labels")
+
+ggsave(file.path(out_dir, "network_2_countries.png"),
+       p_country, width = 12, height = 10, dpi = 150)
+
+
+# 3) Community Graph + Sector Labels
+p_sector <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey70") +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  geom_node_text(aes(label = sector), size = 3, alpha = 0.7, repel = TRUE) +
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_manual(values = palette, name = "Community") +
+  theme_void() +
+  ggtitle("Correlation Network — Sector labels")
+
+ggsave(file.path(out_dir, "network_3_sectors.png"),
+       p_sector, width = 12, height = 10, dpi = 150)
+
+
+# 4) Risk Cluster Graph (High vs Low risk)
+p_cluster <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey75") +
+  geom_node_point(aes(color = Cluster), size = 4) +
+  geom_node_text(aes(label = sector), size = 3, alpha = 0.7, repel = TRUE) +
+  scale_color_manual(values = c("Low risk" = "#1f78b4",
+                                "High risk" = "#e31a1c"),
+                     drop = FALSE,
+                     name = "Risk cluster") +
+  scale_edge_width(range = c(0.1, 1)) +
+  theme_void() +
+  ggtitle("Correlation Network — Nodes colored by Risk Cluster")
+
+ggsave(file.path(out_dir, "network_4_risk_clusters.png"),
+       p_cluster, width = 12, height = 10, dpi = 150)
+
+
+print(p_comm)
+print(p_sector)
+print(p_cluster)
+print(p_country)

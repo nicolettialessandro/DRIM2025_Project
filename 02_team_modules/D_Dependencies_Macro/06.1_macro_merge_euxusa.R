@@ -284,3 +284,136 @@ summ <- panel_df %>%
 
 write_csv(summ, "02_team_modules/D_Dependencies_Macro/summary_panel_by_cluster.csv")
 message("✅ Saved: summary_panel_by_cluster.csv")
+
+# ==========================================================
+# 8) GENERAZIONE GRAFICI DI VALIDAZIONE (VISUAL CHECKS)
+# ==========================================================
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(corrplot)
+  library(tidyr)
+})
+
+# --- Configurazione Grafica Base ---
+theme_set(theme_minimal(base_size = 12))
+PLOT_PATH <- "02_team_modules/D_Dependencies_Macro/plots"
+dir.create(PLOT_PATH, showWarnings = FALSE)
+
+## Mappa di Correlazione (Heatmap)
+
+# Seleziona le colonne numeriche di interesse
+corr_data <- panel_df %>%
+  select(PD_mean, unemployment_rate, hicp_yoy, yield_10y, credit_spread_bp, gdp, gpr) %>%
+  drop_na() # Rimuove le righe con NA per la correlazione
+
+# Calcola la matrice di correlazione
+M <- cor(corr_data)
+
+# Crea l'immagine della Heatmap
+png(file.path(PLOT_PATH, "macro_correlation_heatmap.png"), width = 800, height = 800)
+corrplot(M, method = "color", 
+         type = "upper", # Mostra solo la metà superiore
+         order = "hclust", # Raggruppa le variabili simili
+         addCoef.col = "black", # Aggiunge il valore del coefficiente
+         tl.cex = 1, tl.col = "black", 
+         main = "Matrice di Correlazione tra PD e Variabili Macro")
+dev.off()
+message("✅ Grafico 3 salvato: macro_correlation_heatmap.png")
+
+# ==========================================================
+# 9) SERIE STORICHE MACRO/PD PER PAESE E SETTORE (2015-2024)
+# ==========================================================
+
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(tidyr)
+  library(dplyr)
+  library(scales)
+})
+
+# --- Configurazione e Filtro Temporale ---
+PLOT_PATH <- "02_team_modules/D_Dependencies_Macro/plots/ts_by_country_sector"
+dir.create(PLOT_PATH, recursive = TRUE, showWarnings = FALSE)
+
+# Filtra il panel per l'intervallo 2015-2024
+panel_filtered <- panel_df %>%
+  filter(year(date) >= 2015, year(date) <= 2024) %>%
+  # Rimuove le righe con Cluster NA che possono causare rumore
+  filter(!is.na(Cluster) & Cluster != "NA")
+
+
+## ----------------------------------------------------------
+## A. SERIE STORICHE MACROECONOMICHE (Dati per Paese/ISO)
+## ----------------------------------------------------------
+# Queste variabili sono le stesse per tutte le industrie dello stesso Paese/Mese.
+# Vengono aggregate per ISO/Date.
+
+# Variabili da plottare
+macro_vars <- c("unemployment_rate", "hicp_yoy", "yield_10y", "gdp")
+
+# Crea un dataframe pulito per le macro per ISO/Date
+macro_ts_df <- panel_filtered %>%
+  # Seleziona le colonne macro e le chiavi
+  select(iso, date, all_of(macro_vars)) %>%
+  # Deduplica, prendendo il valore medio (dovrebbe essere unico per iso/date)
+  group_by(iso, date) %>%
+  summarise(across(.fns = mean, na.rm = TRUE), .groups = "drop") %>%
+  # Trasforma da wide a long per plottare in facette
+  pivot_longer(
+    cols = all_of(macro_vars),
+    names_to = "variable",
+    values_to = "value"
+  )
+
+# Genera e salva il grafico
+p_macro_ts <- macro_ts_df %>%
+  ggplot(aes(x = date, y = value, color = iso)) +
+  geom_line(linewidth = 0.8) +
+  facet_wrap(~ variable, scales = "free_y", ncol = 2,
+             labeller = as_labeller(c(
+               "unemployment_rate" = "Tasso Disoccupazione (%)",
+               "hicp_yoy" = "Inflazione YoY (%)",
+               "yield_10y" = "Rendimento 10Y (%)",
+               "gdp" = "GDP Index/Growth"
+             ))) +
+  labs(
+    title = "Serie Storiche Variabili Macro Economiche per Paese (2015-2024)",
+    x = "Data",
+    y = "Valore",
+    color = "Paese (ISO)"
+  ) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p_macro_ts)
+ggsave(file.path(PLOT_PATH, "01_macro_ts_by_iso.png"), plot = p_macro_ts, width = 12, height = 8)
+message("✅ Grafico Dettagliato 1 salvato: 01_macro_ts_by_iso.png")
+
+
+## ----------------------------------------------------------
+## B. SERIE STORICHE PD MEDIA (Dati per Settore/gdesc)
+## ----------------------------------------------------------
+# Questo grafico mostra come l'aggregazione di rischio varia tra i settori.
+
+p_pd_sector_ts <- panel_filtered %>%
+  # Calcola la PD media per Settore e Paese (mediando tra i cluster)
+  group_by(iso, gdesc, date) %>%
+  summarise(PD_avg = mean(PD_mean, na.rm = TRUE), .groups = "drop") %>%
+  
+  ggplot(aes(x = date, y = PD_avg, group = interaction(iso, gdesc), color = gdesc)) +
+  geom_line(alpha = 0.7) +
+  # Suddivide i grafici per Paese (Paese sulla facetta, Settore sul colore)
+  facet_wrap(~ iso, scales = "free_y", ncol = 3) + 
+  labs(
+    title = "Andamento Storico della PD Media per Settore",
+    subtitle = "Rappresenta il rischio specifico di ogni 'gdesc' all'interno dei paesi",
+    x = "Data",
+    y = "PD Media (q_1y, %)",
+    color = "Settore (gdesc)"
+  ) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(p_pd_sector_ts)
+ggsave(file.path(PLOT_PATH, "02_pd_ts_by_sector_country.png"), plot = p_pd_sector_ts, width = 14, height = 10)
+message("✅ Grafico Dettagliato 2 salvato: 02_pd_ts_by_sector_country.png")

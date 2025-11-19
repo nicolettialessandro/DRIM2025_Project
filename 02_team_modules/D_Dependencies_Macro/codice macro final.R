@@ -1,7 +1,4 @@
-## =========================================================
 ## Multi-country macro download (monthly where possible)
-## Clean version with robust 10Y yield filter
-## =========================================================
 
 libs <- c(
   "dplyr", "tidyr", "purrr", "tibble",
@@ -100,9 +97,6 @@ cpi_df <- eurostat::get_eurostat("prc_hicp_manr") %>%
 yield_raw <- eurostat::get_eurostat("ei_mfir_m") %>%
   normalize_time()
 
-## Look at structure (uncomment in your console if curious)
-## names(yield_raw); dplyr::count(yield_raw, unit); head(yield_raw)
-
 ## Keep only our countries
 yield_raw <- yield_raw %>%
   dplyr::filter(geo %in% geo_vec)
@@ -173,7 +167,6 @@ if (nrow(yields_10y_df) > 0 && any(yields_10y_df$iso == "DEU")) {
 }
 
 ## 5) GDP (quarterly -> monthly proxy)
-
 gdp_q_df <- eurostat::get_eurostat("namq_10_gdp") %>%
   normalize_time() %>%
   dplyr::filter(
@@ -209,7 +202,6 @@ if (nrow(gdp_q_df) > 0) {
 }
 
 ## 6) GPR - Dati GPRC per Paese (Sostituisce il Placeholder Globale)
-
 library(readxl)
 library(dplyr)
 library(tidyr)

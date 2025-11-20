@@ -89,11 +89,20 @@ p_sil <- ggplot(sil_df, aes(x = k, y = silhouette)) +
     y = "Average silhouette width"
   ) +
   geom_vline(xintercept = k_opt, linetype = "dashed", color = "red") +
-  annotate("text", x = k_opt, y = max(sil_df$silhouette), 
-           label = paste("Optimal k =", k_opt), vjust = -0.8, color = "red")
+  annotate(
+    "text",
+    x = k_opt,
+    y = max(sil_df$silhouette) + 0.03,   # ⬅️ sposta la scritta più in basso
+    label = paste("Optimal k =", k_opt),
+    color = "red"
+  ) +
+  coord_cartesian(clip = "off") +         # ⬅️ evita il taglio
+  theme(plot.margin = margin(20, 20, 40, 20))  # ⬅️ aumenta margine top
+
 print(p_sil)
 
-ggsave(filename = file.path(out_dir, "silhouette_plot.png"), plot = p_sil, width = 7, height = 5)
+ggsave(filename = file.path(out_dir, "silhouette_plot.png"),
+       plot = p_sil, width = 7, height = 5)
 
 # ---------- 6) K-means clustering ----------
 set.seed(123)
@@ -104,11 +113,19 @@ print(table(km$cluster))
 agg_df <- agg_df %>% mutate(Cluster = factor(km$cluster))
 
 # ---------- 8) PCA plot ----------
+
+km$cluster <- factor(km$cluster,
+                     levels = c(1, 2),
+                     labels = c("Low risk", "High risk"))
+
+
 p1 <- fviz_cluster(km, data = clust_data, geom = "point", ellipse.type = "convex") +
   ggtitle(paste("Clustering of Country–Sector Risk Profiles (k =", k_opt, ")"))
+
 print(p1)
 
-ggsave(filename = file.path(out_dir, "pca_clusters.png"), plot = p1, width = 7, height = 5)
+ggsave(filename = file.path(out_dir, "pca_clusters.png"),
+       plot = p1, width = 7, height = 5)
 
 # ---------- 9) Ordinamento cluster per rischio medio ----------
 cluster_summary <- agg_df %>%

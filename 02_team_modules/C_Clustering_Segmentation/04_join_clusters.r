@@ -160,9 +160,17 @@ cluster_counts <- cluster_counts %>%
                                 "1" = "Low risk",
                                 "2" = "High risk"))
 
-ggplot(cluster_counts, aes(x = Cluster_Label, y = Count, fill = Cluster_Label)) +
+p_cluster <- ggplot(cluster_counts, aes(x = Cluster_Label, y = Count, fill = Cluster_Label)) +
   geom_col(show.legend = FALSE) +
   geom_text(aes(label = Count), vjust = -0.3, size = 4) +
   theme_minimal() +
   labs(title = "Cluster distribution per level of risk",
        x = "Level of risk", y = "Number of observations")
+
+
+ggsave(
+  filename = file.path(out_dir, "cluster_distribution.png"),
+  plot =p_cluster,
+  width = 7,
+  height = 5
+)

@@ -84,6 +84,10 @@ V(g)$Cluster <- dplyr::recode(as.character(community_table$Cluster),
                                   "1" = "Low risk",
                                   "2" = "High risk")
 
+# Cluster è già Low/High risk → basta convertirlo in factor
+V(g)$Cluster <- factor(community_table$Cluster,
+                       levels = c("Low risk", "High risk"))
+
 palette <- scales::hue_pal()(length(unique(V(g)$community)))
 V(g)$color <- palette[V(g)$community]
 
@@ -155,6 +159,43 @@ scale_color_manual(values = c("Low risk" = "#1f78b4",
 ggsave(file.path(out_dir, "network_4_combined_labels.png"),
        p_cluster, width = 12, height = 10, dpi = 150)
 
+# ==========================================================
+# 10) Graph with Country–Sector Labels (pure node labels)
+# ==========================================================
+
+set.seed(123)
+
+# ==========================================================
+# EXTRA PLOT — Country–Sector Nodes Colored by Community
+# ==========================================================
+
+# Create custom palette for communities
+community_palette <- scales::hue_pal()(length(unique(V(g)$community)))
+
+# Build labels "COUNTRY - SECTOR"
+V(g)$label_cs <- paste(V(g)$country, "-", V(g)$sector)
+
+p_cs_comm <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight),
+                 alpha = 0.08, color = "grey70") +
+  geom_node_point(aes(color = factor(community)),
+                  size = 4, alpha = 0.9) +
+  geom_node_text(aes(label = label_cs),
+                 size = 3, alpha = 0.75, repel = TRUE) +
+  scale_color_manual(values = community_palette,
+                     name = "Community") +
+  scale_edge_width(range = c(0.1, 1)) +
+  theme_void() +
+  ggtitle("Correlation Network — Country–Sector Nodes (Communities)")
+
+print(p_cs_comm)
+
+ggsave(
+  file.path(out_dir, "network_country_sector_communities.png"),
+  p_cs_comm,
+  width = 12, height = 10, dpi = 150
+)
+
 
 print(p_comm)
 print(p_sector)
@@ -188,3 +229,6 @@ ggsave(file.path(out_dir, "network_5_comm_country_sector.png"),
        p_comm_country_sector, width = 16, height = 14, dpi = 300) # Aumentato da 12x10 a 16x14
 
 print(p_comm_country_sector)
+print(p_country_sector)
+print(p_cs_comm)
+

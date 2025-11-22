@@ -203,10 +203,12 @@ if (nrow(gdp_q_df) > 0) {
 
 ## 6) GPR - Country-level GPRC + fallback GPR_GLOBAL
 
-library(readxl)
-library(dplyr)
-library(tidyr)
-library(stringr)
+# Ensure necessary libraries are loaded (already done at the start, but good practice)
+# library(readxl)
+# library(dplyr)
+# library(tidyr)
+# library(stringr)
+# library(arrow) # For Parquet saving
 
 gpr_path <- "01_data_clean/GPR_dataclean.xlsx"
 
@@ -215,7 +217,7 @@ if (!file.exists(gpr_path)) {
 }
 
 # 1) Carica file
-gpr_raw_df <- read_excel(gpr_path)
+gpr_raw_df <- readxl::read_excel(gpr_path)
 
 # 2) Rinomina la prima colonna e convertila in date
 colnames(gpr_raw_df)[1] <- "date"
@@ -223,19 +225,19 @@ gpr_raw_df$date <- as.Date(gpr_raw_df$date)
 
 # 3) Serie globale
 gpr_global_df <- gpr_raw_df %>%
-  select(date, gpr_global = GPR_GLOBAL)
+  dplyr::select(date, gpr_global = GPR_GLOBAL)
 
 # 4) Serie country-specific
 gprc_df <- gpr_raw_df %>%
-  select(date, starts_with("GPRC_")) %>%
-  pivot_longer(
+  dplyr::select(date, starts_with("GPRC_")) %>%
+  tidyr::pivot_longer(
     cols = starts_with("GPRC_"),
     names_to = "country_gpr",
     values_to = "gpr_c"
   ) %>%
-  mutate(iso = str_remove(country_gpr, "GPRC_")) %>%
-  filter(iso %in% iso_vec) %>%
-  select(iso, date, gpr_c)
+  dplyr::mutate(iso = stringr::str_remove(country_gpr, "GPRC_")) %>%
+  dplyr::filter(iso %in% iso_vec) %>%
+  dplyr::select(iso, date, gpr_c)
 
 # 5) Griglia iso × date
 full_grid <- expand.grid(
@@ -246,32 +248,56 @@ full_grid <- expand.grid(
 
 # 6) Merge + fallback
 gpr_df <- full_grid %>%
-  left_join(gprc_df, by = c("iso", "date")) %>%
-  left_join(gpr_global_df, by = "date") %>%
-  mutate(
-    gpr = if_else(is.na(gpr_c), gpr_global, gpr_c)
+  dplyr::left_join(gprc_df, by = c("iso", "date")) %>%
+  dplyr::left_join(gpr_global_df, by = "date") %>%
+  dplyr::mutate(
+    gpr = dplyr::if_else(is.na(gpr_c), gpr_global, gpr_c)
   ) %>%
-  select(iso, date, gpr) %>%
-  arrange(iso, date)
+  dplyr::select(iso, date, gpr) %>%
+  dplyr::arrange(iso, date) %>%
+  clip_period("date") # Clip to start_date/end_date for consistency
 
 message("✅ GPR per country + fallback globale caricato correttamente — n obs: ", nrow(gpr_df))
 
 # === SAVE CLEANED MACRO DATA TO PARQUET ===
-library(arrow)
 
 dir.create("01_data_clean/macro", recursive = TRUE, showWarnings = FALSE)
 
-write_parquet(unemp_df,      "01_data_clean/macro/unemployment.parquet")
-write_parquet(cpi_df,        "01_data_clean/macro/inflation.parquet")
-write_parquet(yields_10y_df, "01_data_clean/macro/yields_10y.parquet")
-write_parquet(credit_spread_df, "01_data_clean/macro/credit_spreads.parquet")
-write_parquet(gdp_m_df,      "01_data_clean/macro/gdp.parquet")
+# Check if dataframes exist and have rows before saving
+if (exists("unemp_df") && nrow(unemp_df) > 0) {
+  arrow::write_parquet(unemp_df, "01_data_clean/macro/unemployment.parquet")
+} else {
+  warning("Unemployment data (unemp_df) is empty or missing and will not be saved.")
+}
+
+if (exists("cpi_df") && nrow(cpi_df) > 0) {
+  arrow::write_parquet(cpi_df, "01_data_clean/macro/inflation.parquet")
+} else {
+  warning("Inflation data (cpi_df) is empty or missing and will not be saved.")
+}
+
+if (exists("yields_10y_df") && nrow(yields_10y_df) > 0) {
+  arrow::write_parquet(yields_10y_df, "01_data_clean/macro/yields_10y.parquet")
+} else {
+  warning("10Y Yields data (yields_10y_df) is empty or missing and will not be saved.")
+}
+
+if (exists("credit_spread_df") && nrow(credit_spread_df) > 0) {
+  arrow::write_parquet(credit_spread_df, "01_data_clean/macro/credit_spreads.parquet")
+} else {
+  warning("Credit Spreads data (credit_spread_df) is empty or missing and will not be saved.")
+}
+
+if (exists("gdp_m_df") && nrow(gdp_m_df) > 0) {
+  arrow::write_parquet(gdp_m_df, "01_data_clean/macro/gdp.parquet")
+} else {
+  warning("GDP data (gdp_m_df) is empty or missing and will not be saved.")
+}
 
 if (exists("gpr_df") && nrow(gpr_df) > 0) {
-  write_parquet(gpr_df, "01_data_clean/macro/gpr.parquet")
+  arrow::write_parquet(gpr_df, "01_data_clean/macro/gpr.parquet")
+} else {
+  warning("GPR data (gpr_df) is empty or missing and will not be saved.")
 }
 
 message("✅ All macro datasets saved successfully in 01_data_clean/macro/")
-
-gpr_raw_df <- readxl::read_excel("gpr_path <- 01_data_clean/GPR_dataclean.xlsx")
-names(gpr_raw_df)

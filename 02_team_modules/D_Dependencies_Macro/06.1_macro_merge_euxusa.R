@@ -41,7 +41,7 @@ macro_df <- macro_df %>%
     .groups = "drop"
   )
 
-# --- Aggiungi GPR country-specific (da formato wide a long) ---
+# Aggiungi GPR country-specific (da formato wide a long) ---
 if (nrow(gpr_df) > 0) {
   
   # La lettura del messaggio è cambiata, mostra le colonne già in formato long
@@ -232,10 +232,9 @@ pd_df <- pd_base %>%
   transmute(
     iso = toupper(country),
     gdesc = as.character(gdesc),
-    # Rinomina i cluster per leggibilità
-    Cluster = recode(as.character(Cluster),
-                     "1" = "Low risk",
-                     "2" = "High risk"),
+    # Codice Corretto (forza l'uso della funzione dplyr)
+    Cluster = dplyr::recode(as.character(Cluster), 
+                            "1" = "Low risk", "2" = "High risk"),
     date = floor_date(as.Date(data_date), "month"),
     q_1y = as.numeric(q_1y)
   ) %>%

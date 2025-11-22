@@ -62,7 +62,7 @@ unemp_df <- eurostat::get_eurostat("une_rt_m") %>%
   normalize_time() %>%
   dplyr::filter(
     geo %in% geo_vec,
-    sex == "T",        # Totale Sesso
+    sex == "T",       # Totale Sesso
     age %in% c("Y15-74", "TOTAL"), # La categoria più comune, puoi scegliere solo una
     s_adj == "SA"      # Stagionalmente Aggiustato (l'indicatore più usato)
   ) %>%
@@ -202,55 +202,76 @@ if (nrow(gdp_q_df) > 0) {
 }
 
 ## 6) GPR - Dati GPRC per Paese (Sostituisce il Placeholder Globale)
-library(readxl)
-library(dplyr)
-library(tidyr)
-library(stringr)
+# --- MODIFICATO: Legge il CSV, usa GPR_GLOBAL come fallback ---
+library(readr) # Necessario per read_csv
 
-gpr_path <- "01_data_clean/GPR_dataclean.xlsx"
+gpr_path <- "GPR_dataclean.xlsx - Sheet1.csv" # Usiamo il CSV caricato. Modifica questo se necessario.
 
-if (file.exists(gpr_path) && requireNamespace("readxl", quietly = TRUE)) {
+if (file.exists(gpr_path) && requireNamespace("readr", quietly = TRUE)) {
   
-  gpr_raw_df <- read_excel(gpr_path)
+  # 1. Carica i dati GPR
+  gpr_raw_df <- readr::read_csv(gpr_path, show_col_types = FALSE) %>%
+    dplyr::rename(date = 1) %>% # Rinomina la prima colonna in 'date'
+    dplyr::mutate(date = as.Date(date))
   
-  # Soluzione robusta per rinominare la prima colonna (che è 'Date')
-  # Senza preoccuparsi delle maiuscole/minuscole o della lettura di R
-  if (ncol(gpr_raw_df) > 0) {
-    colnames(gpr_raw_df)[1] <- "date"
-  }
+  # 2. Estrai la serie GPR_GLOBAL
+  gpr_global_df <- gpr_raw_df %>%
+    dplyr::select(date, gpr_global = GPR_GLOBAL) %>%
+    clip_period("date") # Applica il filtro del periodo al globale
   
-  gpr_df <- gpr_raw_df %>%
-    # 1. Seleziona la colonna data e tutte le colonne GPRC
-    select(date, starts_with("GPRC_")) %>%
+  # 3. Trasforma i dati GPRC da largo a lungo
+  gprc_df <- gpr_raw_df %>%
+    # Seleziona la colonna data e tutte le colonne GPRC (non GPR_GLOBAL)
+    dplyr::select(date, starts_with("GPRC_")) %>%
     
-    # 2. Trasforma da formato largo (country in colonne) a formato lungo (country in righe)
+    # Trasforma da formato largo (country in colonne) a formato lungo (country in righe)
     tidyr::pivot_longer(
       cols = starts_with("GPRC_"),
       names_to = "country_gpr",
-      values_to = "gpr" # Rinominato direttamente in 'gpr' come richiesto dal summary
+      values_to = "gpr_c" # gpr_c per indicare il GPR "Country"
     ) %>%
     
-    # 3. Estrai il codice paese ISO3 (es. da GPRC_BEL a BEL)
-    mutate(
-      iso = str_remove(country_gpr, "GPRC_"),
-      date = as.Date(date) # Converte la data
+    # Estrai il codice paese ISO3 (es. da GPRC_BEL a BEL)
+    dplyr::mutate(
+      iso = stringr::str_remove(country_gpr, "GPRC_")
     ) %>%
     
-    # 4. Filtra per mantenere solo i paesi del tuo vettore iso_vec
-    # Nota: alcuni paesi nel file GPR (es. UKR) potrebbero essere esclusi se non sono in iso_vec
-    filter(iso %in% iso_vec) %>%
+    # Filtra per mantenere solo i paesi del tuo vettore iso_vec
+    dplyr::filter(iso %in% iso_vec) %>%
     
-    # 5. Applica il filtro del periodo (2015-01-01 a 2024-12-31)
+    # Applica il filtro del periodo
     clip_period("date") %>%
     
-    # 6. Ordina e seleziona le colonne finali
-    dplyr::arrange(iso, date) %>%
-    dplyr::select(iso, date, gpr)
+    # Rimuovi le colonne intermedie
+    dplyr::select(iso, date, gpr_c)
   
-  message("GPR (GPRC) data loaded for individual countries: ", nrow(gpr_df), " observations")
+  # 4. Crea una griglia completa di date e paesi
+  all_dates <- unique(gpr_global_df$date)
+  full_grid <- expand.grid(date = all_dates, iso = iso_vec, stringsAsFactors = FALSE) %>%
+    dplyr::as_tibble()
+  
+  # 5. Unisci i dati GPRC e il GPR_GLOBAL alla griglia completa
+  gpr_df <- full_grid %>%
+    # Unisci i dati GPRC disponibili
+    dplyr::left_join(gprc_df, by = c("iso", "date")) %>%
+    
+    # Unisci i dati GPR_GLOBAL
+    dplyr::left_join(gpr_global_df, by = "date") %>%
+    
+    # 6. Implementa la logica di fallback
+    # Se gpr_c è NA (paese senza dati specifici), usa gpr_global
+    dplyr::mutate(
+      gpr = dplyr::if_else(is.na(gpr_c), gpr_global, gpr_c)
+    ) %>%
+    
+    # 7. Pulisci e ordina
+    dplyr::select(iso, date, gpr) %>%
+    dplyr::arrange(iso, date)
+  
+  message("GPR (GPRC con fallback GPR_GLOBAL) data loaded for individual countries: ", nrow(gpr_df), " observations")
   
 } else {
-  message("GPR Excel file not found or 'readxl' not installed, leaving gpr_df empty.")
+  message("GPR CSV file not found or 'readr' not installed, leaving gpr_df empty.")
   gpr_df <- tibble::tibble(
     iso = character(),
     date = as.Date(character()),
@@ -263,11 +284,11 @@ library(arrow)
 
 dir.create("01_data_clean/macro", recursive = TRUE, showWarnings = FALSE)
 
-write_parquet(unemp_df,         "01_data_clean/macro/unemployment.parquet")
-write_parquet(cpi_df,           "01_data_clean/macro/inflation.parquet")
-write_parquet(yields_10y_df,    "01_data_clean/macro/yields_10y.parquet")
+write_parquet(unemp_df,      "01_data_clean/macro/unemployment.parquet")
+write_parquet(cpi_df,        "01_data_clean/macro/inflation.parquet")
+write_parquet(yields_10y_df, "01_data_clean/macro/yields_10y.parquet")
 write_parquet(credit_spread_df, "01_data_clean/macro/credit_spreads.parquet")
-write_parquet(gdp_m_df,         "01_data_clean/macro/gdp.parquet")
+write_parquet(gdp_m_df,      "01_data_clean/macro/gdp.parquet")
 
 if (exists("gpr_df") && nrow(gpr_df) > 0) {
   write_parquet(gpr_df, "01_data_clean/macro/gpr.parquet")

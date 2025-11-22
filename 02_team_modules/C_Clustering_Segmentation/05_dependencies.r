@@ -80,6 +80,10 @@ community_table <- community_table %>%
 # Write attributes into graph
 V(g)$country <- community_table$country
 V(g)$sector  <- community_table$sector
+V(g)$Cluster <- dplyr::recode(as.character(community_table$Cluster),
+                                  "1" = "Low risk",
+                                  "2" = "High risk")
+
 # Cluster è già Low/High risk → basta convertirlo in factor
 V(g)$Cluster <- factor(community_table$Cluster,
                        levels = c("Low risk", "High risk"))
@@ -93,10 +97,6 @@ write.csv(community_table,
 
 # ==========================================================
 # 8) PLOTS (4 versioni pulite)
-# ==========================================================
-
-# ==========================================================
-# 9) FOUR CLEAN GRAPH OPTIONS FOR PRESENTATION
 # ==========================================================
 
 set.seed(123)
@@ -141,21 +141,22 @@ p_sector <- ggraph(g, layout = "fr") +
 ggsave(file.path(out_dir, "network_3_sectors.png"),
        p_sector, width = 12, height = 10, dpi = 150)
 
-
-# 4) Risk Cluster Graph (High vs Low risk)
+# 4) Risk Cluster Graph (High vs Low risk) – MODIFICATO
 p_cluster <- ggraph(g, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey75") +
   geom_node_point(aes(color = Cluster), size = 4) +
-  geom_node_text(aes(label = sector), size = 3, alpha = 0.7, repel = TRUE) +
-  scale_color_manual(values = c("Low risk" = "#1f78b4",
-                                "High risk" = "#e31a1c"),
-                     drop = FALSE,
-                     name = "Risk cluster") +
+  # === MODIFICA QUI: Combina le etichette per il nodo ===
+  geom_node_text(aes(label = paste(country, sector, sep = "-")), size = 2.5, alpha = 0.7, repel = TRUE) +
+  # ======================================================
+scale_color_manual(values = c("Low risk" = "#1f78b4",
+                              "High risk" = "#e31a1c"),
+                   drop = FALSE,
+                   name = "Risk cluster") +
   scale_edge_width(range = c(0.1, 1)) +
   theme_void() +
-  ggtitle("Correlation Network — Nodes colored by Risk Cluster")
+  ggtitle("Correlation Network — Nodes labeled by Country-Sector")
 
-ggsave(file.path(out_dir, "network_4_risk_clusters.png"),
+ggsave(file.path(out_dir, "network_4_combined_labels.png"),
        p_cluster, width = 12, height = 10, dpi = 150)
 
 # ==========================================================
@@ -200,5 +201,34 @@ print(p_comm)
 print(p_sector)
 print(p_cluster)
 print(p_country)
+# ==========================================================
+# 5) NUOVO GRAFICO: Communities (Louvain) + Etichetta Paese-Settore
+# ==========================================================
+
+# Utilizza la struttura di p_comm, ma aggiunge l'etichetta combinata
+# e aumenta le dimensioni/risoluzione per evitare sovrapposizioni.
+
+p_comm_country_sector <- ggraph(g, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.10, color = "grey7") +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  
+  # Etichetta combinata Paese-Settore
+  geom_node_text(aes(label = paste(country, sector, sep = "_")), 
+                 size = 2.5, # Dimensione del testo leggermente ridotta
+                 alpha = 0.8, 
+                 repel = TRUE,
+                 max.overlaps = 50) + # Aumenta la tolleranza alle sovrapposizioni per visualizzare più etichette
+  
+  scale_edge_width(range = c(0.1, 1)) +
+  scale_color_manual(values = palette, name = "Community") +
+  theme_void() +
+  ggtitle("Correlation Network — Communities (Labeled by Country-Sector)")
+
+# Salva con dimensioni maggiori e alta risoluzione (DPI)
+ggsave(file.path(out_dir, "network_5_comm_country_sector.png"),
+       p_comm_country_sector, width = 16, height = 14, dpi = 300) # Aumentato da 12x10 a 16x14
+
+print(p_comm_country_sector)
 print(p_country_sector)
 print(p_cs_comm)
+

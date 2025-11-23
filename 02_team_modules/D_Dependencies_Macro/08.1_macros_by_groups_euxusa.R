@@ -191,27 +191,28 @@ plot_heatmap <- function(tbl, group_var, title) {
   ) +
     geom_tile() +
     geom_text(aes(label = sig), color = "white", size = 3, fontface = "bold") +
-    scale_fill_gradient2(low = "#2166AC", mid = "white", high = "#B2182B", midpoint = 0) +
+    scale_fill_gradient(low = "lightgrey", high = "darkgreen") +
     labs(title = title, x = "Macro (z-score)", y = stringr::str_to_title(group_var), fill = "Coeff") +
     theme_minimal() +
     theme(axis.text.y = element_text(size = 8))
 }
 
 if (nrow(coefs_cluster) > 0) {
-  g1 <- plot_heatmap(coefs_cluster, "cluster", "Panel FE per Cluster — Coefficienti standardizzati")
+  g1 <- plot_heatmap(coefs_cluster, "cluster", "Cluster Panel FE")
   ggsave(file.path(OUT, "heatmap_cluster_panelFE.png"), g1, width = 8, height = 5, dpi = 150)
 }
 
 if (nrow(coefs_sector) > 0) {
-  top20 <- coefs_sector %>%
-    distinct(gdesc, n) %>% arrange(desc(n)) %>% slice(1:20) %>% pull(gdesc)
-  g2 <- plot_heatmap(coefs_sector %>% filter(gdesc %in% top20),
-                     "gdesc", "Panel FE per Settore (Top 20) — Coefficienti standardizzati")
-  ggsave(file.path(OUT, "heatmap_sector_panelFE_top20.png"), g2, width = 10, height = 8, dpi = 150)
+  g2 <- plot_heatmap(
+    coefs_sector,
+    "gdesc",
+    "Sector Panel FE"
+  )
+  ggsave(file.path(OUT, "heatmap_sector_panelFE.png"), g2, width = 10, height = 8, dpi = 150)
 }
 
 if (nrow(coefs_country) > 0) {
-  g3 <- plot_heatmap(coefs_country, "iso", "Panel FE per Paese — Coefficienti standardizzati")
+  g3 <- plot_heatmap(coefs_country, "iso", "Country Panel FE")
   ggsave(file.path(OUT, "heatmap_country_panelFE.png"), g3, width = 8, height = 6, dpi = 150)
 }
 

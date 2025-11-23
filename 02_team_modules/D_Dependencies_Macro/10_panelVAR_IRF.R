@@ -20,6 +20,7 @@ agg_df <- panel %>%
     yield = mean(yield_10y, na.rm = TRUE),
     spread = mean(credit_spread_bp, na.rm = TRUE),
     gdp = mean(gdp, na.rm = TRUE),
+    gpr = mean(gpr, na.rm=TRUE),
     .groups = "drop"
   ) %>%
   drop_na()
@@ -34,6 +35,7 @@ hicp_ts   <- ts(agg_df$hicp,   start = c(start_year, start_month), frequency = 1
 yield_ts  <- ts(agg_df$yield,  start = c(start_year, start_month), frequency = 12)
 spread_ts <- ts(agg_df$spread, start = c(start_year, start_month), frequency = 12)
 gdp_ts    <- ts(agg_df$gdp,    start = c(start_year, start_month), frequency = 12)
+gpr_ts   <- ts(agg_df$gpr,start = c(start_year,start_month),frequency = 12)
 
 # 3) Define helper function for Granger
 granger_test <- function(x, y, lags = 3) {
@@ -53,7 +55,8 @@ res <- bind_rows(
   granger_test(hicp_ts,   PD_ts, lags = 3),
   granger_test(yield_ts,  PD_ts, lags = 3),
   granger_test(spread_ts, PD_ts, lags = 3),
-  granger_test(gdp_ts,    PD_ts, lags = 3)
+  granger_test(gdp_ts,    PD_ts, lags = 3),
+  granger_test(gpr_ts,   PD_ts, lags=3)
 )
 
 print(res)
